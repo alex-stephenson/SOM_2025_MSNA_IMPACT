@@ -20,3 +20,10 @@
 
 # RStudio Connect folder
 rsconnect/
+
+# .rds output
+*.rds
+
+
+# geospatial files
+02_input/03_sampling
