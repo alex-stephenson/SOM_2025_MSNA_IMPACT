@@ -5,53 +5,60 @@ library(tidyverse)
 library(cleaningtools)
 library(readxl)
 
-## FO data
-fo_district_mapping <- read_excel("02_input/fo_base_assignment_DSRA_II.xlsx") %>%
-  select(district_name = district, "district" = district_p_code, "fo" = fo_in_charge_for_code)
+# read in the FO/district mapping
+fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
+  select(admin_2, fo_in_charge = FO_In_Charge)
 
 ## raw data
-raw_kobo_data <- read_csv("03_output/raw_data/raw_kobo_output.csv")
+all_raw_data <- read_rds("03_output/01_raw_data/all_raw_data.rds")
 
-raw_kobo_roster <-  read_csv("03_output/raw_data/raw_roster_output.csv")
 
 ## tool
-kobo_tool_name <- "02_input/DSRA_II_Tool.xlsx"
-
-# read in the survey questions / choices
-kobo_survey <- read_excel(kobo_tool_name, sheet = "survey") %>%
-  mutate(type = stringr::str_squish(type))
-
-kobo_choice <- read_excel(kobo_tool_name, sheet = "choices")
+kobo_tool_name <- "04_tool/REACH_2024_MSNA_kobo tool.xlsx"
+questions <- read_excel(kobo_tool_name, sheet = "survey")
+choices <- read_excel(kobo_tool_name, sheet = "choices")
 
 
-# Define directory pattern
-dir_path <- "01_cleaning_logs"
+# Read in all the clogs
+file_list <- list.files(path = "01_cleaning_logs", recursive = TRUE, full.names = TRUE)
 
-
-all_files <- list.files(
-  path = dir_path,
-  recursive = TRUE,
-  full.names = TRUE
-)
-
-file_list <- all_files %>%
-  keep(~ str_detect(.x, "/[^/]+_complete_validated/") & str_detect(.x, "cleaning_log.*\\.xlsx$") & !str_detect(.x, "report"))
-
-
+file_list <- file_list %>%
+  keep(~ str_detect(.x, "May_09"))
 
 # Function to read and convert all columns to character
 read_and_clean <- function(file, sheet) {
   read_excel(file, sheet = sheet) %>%
-    mutate(across(everything(), as.character))  # Convert all columns to character
+    mutate(across(everything(), as.character)) %>%   # Convert all columns to character
+    mutate(file_path = file)
 }
 
 # Read and combine all files into a single dataframe
 cleaning_logs <- map_dfr(file_list, sheet = 'cleaning_log', read_and_clean)
 
+clogs_split <- cleaning_logs %>%
+  group_by(clog_type) %>%
+  group_split() %>%
+  set_names(map_chr(., ~ unique(.x$clog_type)))
 
-## also check all dlogs
-all_dlogs <- readxl::read_excel(r"(03_output/deletion_log/deletion_log.xlsx)", col_types = "text")
-manual_dlog <- readxl::read_excel("03_output/deletion_log_manual/DSRA_II_Manual_Deletion_Log.xlsx", col_types = "text")
+
+common_rosters <- intersect(
+  names(all_raw_data),
+  cleaning_logs$clog_type %>% unique() %>% na.omit()
+)
+
+list_of_df_and_clog <- map(common_rosters, function(g) {
+  raw <- all_raw_data[[g]] %>% mutate(across(everything(), as.character))
+  clog <- clogs_split[[g]] %>% mutate(across(everything(), as.character))
+
+  list(
+    raw_data = raw,
+    cleaning_log = clog
+  )
+})
+
+# Read in all the dlogs
+all_dlogs <- readxl::read_excel(r"(03_output/02_deletion_log/deletion_log.xlsx)", col_types = "text")
+#manual_dlog <- readxl::read_excel("03_output/deletion_log_manual/DSRA_II_Manual_Deletion_Log.xlsx", col_types = "text")
 cleaning_log_deletions <- cleaning_logs %>%
   filter(change_type == "remove_survey") %>%
   mutate(interview_duration = "") %>%
@@ -60,33 +67,58 @@ cleaning_log_deletions <- cleaning_logs %>%
 all_deletions <- bind_rows(all_dlogs, manual_dlog) %>%
   bind_rows(cleaning_log_deletions)
 
-other_clogs <- ImpactFunctions::update_others(kobo_survey, kobo_choice, cleaning_log = cleaning_logs)
 
-raw_kobo_data_nas <- raw_kobo_data %>%
-  mutate(interview_duration = NA) %>%
-  filter(! uuid %in% all_dlogs$uuid & ! uuid %in% manual_dlog$uuid & ! uuid %in% cleaning_log_deletions$uuid)
+### now find a way to apply to each cleaning log the others, remove the deletions and then apply the cleaning_logs
+
+cleaning_log_summaries <- purrr::map(list_of_df_and_clog, function(x) {
+
+  # Apply transformations step-by-step to ensure column types stay correct
+  cleaned_log <- x$cleaning_log %>%
+    filter(!index %in% deletion_log$index) %>%
+    mutate(new_value = as.character(new_value))  # <- This is the key line
+
+  updated_log <- update_others(questions, choices, cleaned_log)
+
+  cleaned_data <- x$raw_data %>%
+    filter(!index %in% deletion_log$index) %>%
+    mutate(across(everything(), as.character))
+
+  list(
+    cleaning_log = updated_log,
+    raw_data = cleaned_data
+  )
+})
+
+### apply the cleaning log to each items in the list
+
+clean_data_logs <- purrr::map(cleaning_log_summaries, function(x) {
+
+  my_clean_data <- create_clean_data(raw_dataset = x$raw_data,
+                                     raw_data_uuid_column = "uuid",
+                                     cleaning_log = x$cleaning_log,
+                                     cleaning_log_uuid_column = "uuid",
+                                     cleaning_log_question_column = "question",
+                                     cleaning_log_new_value_column = "new_value",
+                                     cleaning_log_change_type_column = "change_type")
+
+  my_clean_data_parentcol <- recreate_parent_column(dataset = my_clean_data,
+                                                    uuid_column = "uuid",
+                                                    kobo_survey = kobo_survey,
+                                                    kobo_choices = kobo_choice,
+                                                    sm_separator = "/",
+                                                    cleaning_log_to_append = cleaning_logs_amended)
+
+  list(
+
+    cleaning_log <- my_clean_data_parentcol$cleaning_log,
+    my_clean_data_final <- my_clean_data_parentcol$data_with_fix_concat
+
+    )
+
+})
 
 
-## now apply the clog and the clog using cleaningtools code
 
-my_clean_data <- create_clean_data(raw_dataset = raw_kobo_data_nas,
-                                   raw_data_uuid_column = "uuid",
-                                   cleaning_log = cleaning_logs_amended,
-                                   cleaning_log_uuid_column = "uuid",
-                                   cleaning_log_question_column = "question",
-                                   cleaning_log_new_value_column = "new_value",
-                                   cleaning_log_change_type_column = "change_type")
-
-my_clean_data_parentcol <- recreate_parent_column(dataset = my_clean_data,
-                                                  uuid_column = "uuid",
-                                                  kobo_survey = kobo_survey,
-                                                  kobo_choices = kobo_choice,
-                                                  sm_separator = "/",
-                                                  cleaning_log_to_append = cleaning_logs_amended)
-
-cleaning_log <- my_clean_data_parentcol$cleaning_log
-
-my_clean_data_final <- my_clean_data_parentcol$data_with_fix_concat
 
 
 ############################################# soft duplicates #####################################################

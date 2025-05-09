@@ -13,44 +13,69 @@ raw_kobo <- ImpactFunctions::get_kobo_data(asset_id = "antAdT3siLrnjTdfcdYcFY", 
 
 
 raw_kobo_data <- raw_kobo %>%
-  pluck("main")
+  pluck("main") %>%
+  select(-uuid) %>%
+  dplyr::rename(uuid =`_uuid`,
+                index = `_index`)
 
 ## extract all rosters
 wgs <- raw_kobo %>%
-  pluck("wgs_repeat")
+  pluck("wgs_repeat") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`) %>%
+  mutate(uuid = paste0("wgs_", roster_index))
 
 hh_roster <- raw_kobo %>%
-  pluck("roster")
+  pluck("roster") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`) %>%
+  mutate(uuid = paste0("hh_", roster_index))
 
 edu_roster <- raw_kobo %>%
-  pluck("edu_ind")
+  pluck("edu_ind") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`)  %>%
+  mutate(uuid = paste0("edu_", roster_index))
 
 child_feeding <- raw_kobo %>%
-  pluck("child_feeding")
+  pluck("child_feeding") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`) %>%
+  mutate(uuid = paste0("child_feeding_", roster_index))
 
 health_roster <- raw_kobo %>%
-  pluck("health_ind")
+  pluck("health_ind") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`)  %>%
+  mutate(uuid = paste0("health", roster_index))
 
 child_vacination_roster <- raw_kobo %>%
-  pluck("child_vacination")
+  pluck("child_vacination") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`) %>%
+  mutate(uuid = paste0("child_vacc", roster_index))
 
 died_member_roster <- raw_kobo %>%
-  pluck("died_member")
+  pluck("died_member") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`)  %>%
+  mutate(uuid = paste0("mortality_", roster_index))
 
 
 
-## write all rosters
-raw_kobo_roster %>%
-  write_csv(., "03_output/raw_data/raw_roster_output.csv")
+list_all_data <- list("main" = raw_kobo_data, "WGS" = wgs, "hh_roster" = hh_roster,
+                      "education" = edu_roster, "child_feeding" = child_feeding,
+                      "health" = health_roster, "child_vaccination" = child_vacination_roster,
+                      "mortality" = died_member_roster)
+
+
+list_all_data %>%
+  write_rds(., "03_output/01_raw_data/all_raw_data.rds")
 
 version_count <- n_distinct(raw_kobo_data$`__version__`)
 if (version_count > 1) {
-  print("There are multiple versions of the tool in use")
+  print("~~~~~~There are multiple versions of the tool in use~~~~~~")
 }
-
-raw_kobo_data<- raw_kobo_data %>%
-  dplyr::rename(survey_uuid = uuid,
-                uuid =`_uuid`)
 
 
 # read in the survey questions / choices
@@ -61,7 +86,7 @@ choices <- read_excel(kobo_tool_name, sheet = "choices")
 
 # read in the FO/district mapping
 fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
-  select(admin_2, fo_in_charge = fo_in_charge)
+  select(admin_2, fo_in_charge = FO_In_Charge)
 
 # # join the fo to the dataset
 data_with_fo <- raw_kobo_data %>%
@@ -116,7 +141,8 @@ data_in_processing <- data_with_time %>%
 
 deletion_log <- data_in_processing %>%
   filter(length_valid != "Okay") %>%
-  select(uuid, length_valid, settlement_idp, enum_id, interview_duration)
+  select(uuid, length_valid, settlement_idp, enum_id, interview_duration) %>%
+  left_join(raw_kobo_data %>% select(uuid, index), by = "uuid")
 
 
 deletion_log %>%
@@ -228,7 +254,7 @@ checked_main_data <-  main_data %>%
     minimum_unique_value_of_variable = NULL,
     remove_choice_multiple = TRUE,
     sm_separator = "/",
-    columns_not_to_check = c(excluded_questions_in_data, "_index", "enum_id","enum_age", "interview_duration", "length_valid",
+    columns_not_to_check = c(excluded_questions_in_data, "index", "enum_id","enum_age", "interview_duration", "length_valid",
                              gps_questions, "Longitude_samp","Latitude_samp","_id", "fsl_fcs_cereals",
                              "fsl_fcs_dairy","fsl_fcs_vitA_veg", "fsl_fcs_green_veg","fsl_fcs_veg","fsh_fcs_vitA_fruits", "fsl_fcs_fruit",
                              "fsl_fcs_organ_meat","fsl_fcs_meat","fsl_fcs_eggs","fsl_fcs_fish","fsl_fcs_legumes","fsl_fcs_roots","fsl_fcs_oil",
@@ -249,7 +275,7 @@ main_cleaning_log <-  checked_main_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("enum_id","fo_in_charge")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 
@@ -258,22 +284,21 @@ main_cleaning_log <-  checked_main_data %>%
 ###################################~~~ Roster data cleaning ~~~ ####################################
 #------------------------------------------------------------------------------------------------------#
 
-deletion_log <- deletion_log %>%
-  left_join(raw_kobo_data %>% select(uuid, `_index`), by = "uuid")
+
 
 
 main_to_join <- main_data %>%
-  dplyr::select(admin_1,admin_2,today,enum_id,resp_gender,
-                hoh_gender,settlement_idp,fo_in_charge,Name,deviceid,instance_name, `_index`)
+  dplyr::select(admin_1,admin_2,today,enum_id,resp_gender, enum_gender,
+                hoh_gender,settlement_idp,fo_in_charge,Name,deviceid,instance_name, index)
 
 
 trans_roster <- function(data, id_name) {
   data %>%
-    dplyr::filter(!.data$`_parent_index` %in% deletion_log$`_index`) %>%
-    dplyr::filter(.data$`_parent_index` %in% main_data$`_index`) %>%
-    dplyr::left_join(main_to_join, by = join_by(`_parent_index` == `_index`)) %>%
-    dplyr::filter(!is.na(.data$fo_in_charge)) %>% ### THIS WOULD NEED REMOVING
-    dplyr::rename(uuid = {{ id_name }})
+    dplyr::filter(!.data$index %in% deletion_log$index) %>%
+    dplyr::filter(.data$index %in% main_data$index) %>%
+    dplyr::left_join(main_to_join, by = join_by(`index` == index)) %>%
+    dplyr::filter(!is.na(.data$fo_in_charge)) #%>% ### THIS WOULD NEED REMOVING
+ #   dplyr::rename(uuid = {{ id_name }})
 }
 
 #--------------------------------------------------------------------------------------------------------#
@@ -283,7 +308,7 @@ trans_roster <- function(data, id_name) {
 
 
 hh_roster_bad_removed <- hh_roster %>%
-  trans_roster(id_name = person_id)
+  trans_roster()
 
 checked_hh_roster_data <- hh_roster_bad_removed %>%
   check_duplicate(
@@ -303,7 +328,7 @@ roster_cleaning_log <-  checked_hh_roster_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("enum_id", "fo_in_charge")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 
@@ -314,7 +339,7 @@ roster_cleaning_log <-  checked_hh_roster_data %>%
 
 
 wgs_bad_removed <- wgs %>%
-  trans_roster(id_name = wgs_id)
+  trans_roster()
 
 wgs_bad_removed <- wgs_bad_removed %>%
   mutate(
@@ -361,7 +386,7 @@ wgs_cleaning_log <-  checked_wgs_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("admin_1","admin_2","today","enum_id","settlement_idp","Name","fo_in_charge","deviceid")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 
@@ -371,7 +396,7 @@ wgs_cleaning_log <-  checked_wgs_data %>%
 #------------------------------------------------------------------------#
 
 edu_roster_bad_removed <- edu_roster %>%
-  trans_roster(edu_person_id)
+  trans_roster()
 
 checked_education_data <-  edu_roster_bad_removed %>%
   check_duplicate(
@@ -400,7 +425,7 @@ edu_cleaning_log <-  checked_education_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("admin_1","admin_2","today","enum_id","settlement_idp","Name","fo_in_charge","deviceid")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 #------------------------------------------------------------------------#
@@ -525,7 +550,7 @@ child_feeding_flags_renamed <-child_feeding_flags_renamed %>%
 #------------------------------------------------------------------------#
 
 health_roster_bad_removed <- health_roster %>%
-  trans_roster(health_person_id)
+  trans_roster()
 
 checked_health_data <-health_roster_bad_removed %>%
   check_duplicate(
@@ -549,7 +574,7 @@ health_cleaning_log <-  checked_health_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("admin_1","admin_2","today","enum_id","settlement_idp","Name","fo_in_charge","deviceid")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 
@@ -558,7 +583,7 @@ health_cleaning_log <-  checked_health_data %>%
 ########################################################################################################
 
 child_vacination_roster_bad_removed <- child_vacination_roster %>% #remove surveys that will be deleted
-  trans_roster(vacine_person_id)
+  trans_roster()
 
 checked_child_vacination_data <-child_vacination_roster_bad_removed %>%
   check_duplicate(
@@ -581,28 +606,26 @@ child_vacination_cleaning_log <-  checked_child_vacination_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("admin_1","admin_2","today","enum_id","settlement_idp","Name","fo_in_charge","deviceid")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 #------------------------------------------------------------------------#
 #################### HH died_member data cleaning ########################
 #------------------------------------------------------------------------#
 
-died_member_roster <- died_member_roster %>% mutate(uuid=`_index`) ### this should be made into a proper check, need to add the id field in the roster
-
 died_member_roster_bad_removed <- died_member_roster %>%
-  trans_roster(uuid)
+  trans_roster()
 
 checked_died_member_data <-died_member_roster_bad_removed %>%
   check_duplicate(
     uuid_column = "uuid"
   ) %>%
-  check_others(
-    uuid_column = "uuid",
-    columns_to_check = names(died_member_roster_bad_removed|>
-                               dplyr::select(ends_with("_other")) |>
-                               dplyr::select(-contains(".")))
-  ) %>%
+#  check_others(
+#    uuid_column = "uuid",
+#    columns_to_check = names(died_member_roster_bad_removed|>
+#                               dplyr::select(ends_with("_other")) |>
+#                               dplyr::select(-contains(".")))
+#  ) %>%
   check_value(
     uuid_column = "uuid",
     element_name = "checked_dataset",
@@ -621,7 +644,7 @@ died_cleaning_log <-  checked_died_member_data %>%
   add_info_to_cleaning_log(
     dataset = "checked_dataset",
     cleaning_log = "cleaning_log",
-    information_to_add = c("admin_1","admin_2","today","enum_id","settlement_idp","Name","fo_in_charge","deviceid")
+    information_to_add = c("enum_id", "enum_gender", "fo_in_charge", "admin_1", "admin_2", "settlement_idp", "index")
   )
 
 #------------------------------------------------------------------------#
@@ -660,15 +683,18 @@ fcs_data$deviceid <- main_data$deviceid[match(fcs_data$uuid, main_data$uuid)]#Na
 
 
 final_clog <- bind_rows(
-  main_cleaning_log$cleaning_log,
-  roster_cleaning_log$cleaning_log,
-  child_vacination_cleaning_log$cleaning_log,
-  edu_cleaning_log$cleaning_log,
-  health_cleaning_log$cleaning_log,
+  main_cleaning_log$cleaning_log %>% mutate(clog_type = "main"),
+  roster_cleaning_log$cleaning_log %>% mutate(clog_type = "hh_roster"),
+  child_vacination_cleaning_log$cleaning_log %>% mutate(clog_type = "child_vaccination"),
+  edu_cleaning_log$cleaning_log %>% mutate(clog_type = "education"),
+  health_cleaning_log$cleaning_log %>% mutate(clog_type = "health"),
   #child_feeding_flags_renamed,
-  died_cleaning_log$cleaning_log,
-  wgs_cleaning_log$cleaning_log)#,
+  died_cleaning_log$cleaning_log %>% mutate(clog_type = "mortality"),
+  wgs_cleaning_log$cleaning_log %>% mutate(clog_type = "WGS"))#,
   #fcs_data)
+
+final_clog <- final_clog %>%
+  filter(!is.na(fo_in_charge))
 
 
 
@@ -693,6 +719,16 @@ clog_split <- final_clog %>%
   group_split(fo_in_charge, .keep = TRUE) %>%
   set_names(map_chr(., ~ unique(.x$fo_in_charge))) %>%
   keep(~ nrow(.x) > 0)
+
+cleaning_log <- map(common_groups, function(g) {
+  checked <- checked_split[[g]]
+  clog <- clog_split[[g]]
+
+  list(
+    checked_dataset = checked,
+    cleaning_log = clog
+  )
+})
 
 
 cleaning_log %>% purrr::map(~ cleaningtools::create_xlsx_cleaning_log(.[],
