@@ -1,3 +1,6 @@
+rm(list = ls())
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 0. Setup
 # ──────────────────────────────────────────────────────────────────────────────
@@ -193,7 +196,7 @@ good_clusters <- filter(cluster_pops, cluster_pop >= 5000)$cluster_id
 # 8. Subset to only hexes in those “good” clusters
 hex_urban_centers <- filter(hex_dense, cluster_id %in% good_clusters)
 
-st_write(hex_urban_centers, "03_output/hexagons.shp")
+st_write(hex_urban_centers, "03_output/05_sampling/urban_hc/urban_hc_hexagons.shp")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Export CSV
