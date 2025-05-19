@@ -1,5 +1,5 @@
-rm(list = ls())
 
+rm(list = ls())
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 0. Setup
@@ -11,23 +11,101 @@ library(exactextractr)
 library(tmap)
 library(readxl)
 library(igraph)       # for clustering contiguous hexes
+library(stringr)
+library(purrr)
 
 # Filepaths
 adm1_fp    <- "02_input/03_sampling/admin_1/som_admbnda_adm1_ocha_20250108.shp"
+livelihood_zones <- "02_input/03_sampling/livelihood_zones/SOM_Shapefiles_LZ.shp"
 raster_fp  <- "02_input/03_sampling/pop_density/ghs_pop_e2025_r2023a_54009_100_v1_0_som.tif"
 idp_xlsx   <- "02_input/03_sampling/UoA/idp-site-master-list-sep-2024.xlsx"
 idp_sheet  <- "CCCM IDP Site List (Verified)"
 
+
 # CRS & grid
 crs_utm    <- 32638
-hex_size    <- 1000   # 1 km
+hex_size <- 2598.1
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1. Read & prep Bay region + pop raster + IDP points
-# ──────────────────────────────────────────────────────────────────────────────
-bay_region <- st_read(adm1_fp) %>%
-  st_transform(crs_utm) %>%
-  filter(ADM1_EN %in% c("Awdal", "Bay", "Gedo", "Hiiran", "Nugaal", "Sanaag", "Sool", "Togdheer", "Woqooyi Galbeed"))
+adm_1_UoA <- st_read(adm1_fp)
+UoA_LZs <- st_read(livelihood_zones)
+
+create_UoA <- function(UoA, admin_1) {
+
+  LZs <- UoA_LZs %>%
+    filter(str_detect(LZNAMEEN, UoA))   %>%
+    st_sf() %>%
+    st_transform(., crs_utm)
+
+  adm1 <- adm_1_UoA %>%
+    st_transform(crs_utm) %>%
+    filter(ADM1_EN %in% admin_1) %>%
+    st_sf()%>%
+    st_set_crs(crs_utm)
+
+  UoA <- st_intersection(LZs, adm1)
+
+  #label_val <- paste(UoA, paste(admin_1, collapse = "+"), sep = "_")
+  #UoA_result$label <- rep(label_val, nrow(UoA_result))
+
+  return(UoA)
+}
+
+UoA_inputs_df <- tibble::tibble(
+  UoA = c("Cowpea", "Cowpea", "Hawd Pastoral", "Coastal Deeh Pastoral", "Riverine Pump",
+          "Sorghum High Potential", "Southern Agropastoral", "Southern Agropastoral",
+          "Southern Inland Pastoral", "Southern Inland Pastoral"),
+
+  admin_1 = list("Hiraan", "Middle Shabelle", "Hiraan", c("Middle Shabelle", "Lower Shabelle"), "Hiraan", c("Bay", "Gedo"),
+                 "Gedo", "Hiraan", "Bay", "Hiraan")
+)
+
+
+# Map over inputs and combine results
+UoA_combined <- pmap_dfr(
+  UoA_inputs_df,
+  create_UoA
+) %>%
+  mutate(unit_of_analysis = paste(ADM1_EN, "_", LZNAMEEN))
+
+
+## shabelles
+l_shabelle_fishing <- UoA_combined %>%
+  filter(unit_of_analysis == "Lower Shabelle _ Coastal Deeh Pastoral and Fishing")
+
+m_shabelle_fishing <- UoA_combined %>%
+  filter(unit_of_analysis == "Middle Shabelle _ Coastal Deeh Pastoral and Fishing") %>%
+  select(geometry)
+
+shabelles <- st_union(l_shabelle_fishing, m_shabelle_fishing) %>%
+  mutate(unit_of_analysis = "Lower & Middle Shabelle, Coastal Deeh Pastoral and Fishing")
+
+
+## gedo_bay
+
+gedo_sorghum <- UoA_combined %>%
+  filter(unit_of_analysis == "Gedo _ Sorghum High Potential Agropastoral")
+
+bay_sorghum <- UoA_combined %>%
+  filter(unit_of_analysis == "Bay _ Sorghum High Potential Agropastoral") %>%
+  select(geometry)
+
+
+gedo_bay_sorghum <- st_union(gedo_sorghum, bay_sorghum) %>%
+  mutate(unit_of_analysis = "Gedo & Bay Sorghum High Potential Agropastoral")
+
+UoA_combined_filtered <- UoA_combined %>%
+  filter(!unit_of_analysis %in% c("Lower Shabelle _ Coastal Deeh Pastoral and Fishing",
+                                  "Middle Shabelle _ Coastal Deeh Pastoral and Fishing",
+                                  "Bay _ Sorghum High Potential Agropastoral",
+                                  "Gedo _ Sorghum High Potential Agropastoral")) %>%
+  bind_rows(., shabelles) %>%
+  bind_rows(., gedo_bay_sorghum)
+
+
+
+#------------------------------------------#
+### remove any IDP sites from the UoA
+#------------------------------------------#
 
 pop_rast   <- rast(raster_fp)
 
@@ -38,9 +116,7 @@ idp_sites <- read_excel(idp_xlsx, sheet = idp_sheet) %>%
   rename(idp_pop = `Individual (Q1-2024)`) %>%
   mutate(.row = row_number())
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2. Compute point‐specific buffers (raster-derived density)
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 # 2a) Add an explicit row ID to the sf
 idp_sites <- idp_sites %>%
@@ -90,20 +166,20 @@ idp_buffers <- idp_sites %>%
 
 
 
-
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. Create 1 km hex grid over Bay & punch out IDP buffers
+# 3. Create 1 km hex grid over UoA & punch out IDP buffers
 # ──────────────────────────────────────────────────────────────────────────────
 # make grid over bay bounding box
-hex_grid <- st_make_grid(bay_region, cellsize = hex_size, square = FALSE) %>%
+hex_grid <- st_make_grid(UoA_combined_filtered, cellsize = hex_size, square = FALSE) %>%
   st_sf() %>%
   st_set_crs(crs_utm) %>%
-  st_intersection(bay_region) %>%
-  mutate(hex_ID   = paste0("H", sprintf("%06d", row_number())),
+  st_intersection(UoA_combined_filtered) %>%
+  mutate(hex_ID   = paste0("R", sprintf("%06d", row_number())),
          hex_area = as.numeric(st_area(geometry)))  # in m²
 
 # subtract IDP areas
 hex_grid_cut <- st_difference(hex_grid, idp_buffers)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Extract populations & filter by >300 total pop
@@ -113,7 +189,10 @@ hex_grid_cut <- hex_grid_cut[st_geometry_type(hex_grid_cut) %in% c("POLYGON","MU
 hex_grid_cut$pop_total <- exact_extract(pop_rast, hex_grid_cut, "sum")
 hex_grid_cut <-hex_grid_cut %>%
   mutate(pop_total = ceiling(pop_total))
-hex_300 <- filter(hex_grid_cut, pop_total > 300)
+
+hex_300 <- hex_grid_cut %>%
+  filter(pop_total < 300) %>%
+  filter(pop_total > 50)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5. Compute IDP pop per hex & remove hexes >30% IDP
@@ -141,13 +220,13 @@ idp_by_hex <- idp_in_hex %>%
 hex_final <- hex_300 %>%
   left_join(idp_by_hex, by = "hex_ID") %>%
   mutate(
-    idp_pop  = replace_na(idp_pop, 0),
+    idp_pop  = tidyr::replace_na(idp_pop, 0),
     prop_idp = idp_pop / pop_total
   ) %>%
-  filter(prop_idp <= 0.30)
+  filter(prop_idp <= 0.50)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6. Identify towns & suburbs (clusters of hexes ≥300 inh/km² & sum pop ≥5 000)
+# 6. Identify towns & suburbs (clusters of hexes <300 inh/km² & sum pop <5 000)
 # ──────────────────────────────────────────────────────────────────────────────
 # compute density per km²
 hex_nidp <- hex_final %>%
@@ -157,7 +236,7 @@ hex_nidp <- hex_final %>%
   )
 
 # 1. Keep only high‐density hexes (≥300 inh/km²)
-hex_dense <- filter(hex_nidp, dens_km2 >= 300)
+hex_dense <- filter(hex_nidp, dens_km2 <= 300)
 n <- nrow(hex_dense)
 
 # 2. Compute neighbors with st_touches()
@@ -191,30 +270,40 @@ cluster_pops <- hex_dense %>%
   group_by(cluster_id) %>%
   summarize(cluster_pop = sum(pop_total), .groups="drop")
 
-good_clusters <- filter(cluster_pops, cluster_pop >= 5000)$cluster_id
+good_clusters <- filter(cluster_pops, cluster_pop <= 50000)$cluster_id
 
 # 8. Subset to only hexes in those “good” clusters
-hex_urban_centers <- filter(hex_dense, cluster_id %in% good_clusters)
+hex_rural_centers <- filter(hex_dense, cluster_id %in% good_clusters) %>%
+  mutate(HH_total = ceiling(pop_total/6)) %>%
+  filter(HH_total > 20)
 
-st_write(hex_urban_centers, "03_output/05_sampling/urban_hc/urban_hc_hexagons.shp")
+st_write(hex_rural_centers, "03_output/05_sampling/rural_hc/rural_hc_hexagons.shp", delete_layer = T)
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Export CSV
 # ──────────────────────────────────────────────────────────────────────────────
-out_df <- hex_urban_centers %>%
+out_df <- hex_rural_centers %>%
   st_drop_geometry() %>%
-  select(hex_ID, pop_total, idp_pop, prop_idp, dens_km2, cluster_id)
+  select(hex_ID, pop_total, idp_pop, prop_idp, dens_km2, cluster_id, unit_of_analysis)
 
-write.csv(out_df, "03_output/05_sampling/UoA_Urban.csv", row.names = FALSE)
+write.csv(out_df, "03_output/05_sampling/UoA_Rural.csv", row.names = FALSE)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. Interactive map
 # ──────────────────────────────────────────────────────────────────────────────
 tmap_mode("view")
-tm_shape(hex_urban_centers) +
+tm_shape(hex_rural_centers) +
   tm_polygons("dens_km2", title="Density (inh/km²)", style="quantile") +
-  #tm_text("pop_total") +
+  #tm_text("unit_of_analysis") +
   tm_shape(idp_buffers, size= 0.5) +
-  tm_polygons(col="red", alpha=0.3, border="darkred") +
+  tm_polygons(col="red", alpha=0.15, border="darkred") +
   tm_basemap("OpenStreetMap") +
   tm_layout(title="Bay: Towns & Suburbs (dens≥300 & pop≥5k)")
+
+
+
+
+
+

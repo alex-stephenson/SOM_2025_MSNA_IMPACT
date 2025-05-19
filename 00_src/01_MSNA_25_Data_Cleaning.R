@@ -16,44 +16,64 @@ raw_kobo_data <- raw_kobo %>%
   pluck("main") %>%
   select(-uuid) %>%
   dplyr::rename(uuid =`_uuid`,
-                index = `_index`)
+                index = `_index`) %>%
+  distinct(uuid, .keep_all = T)
 
 ## extract all rosters
 wgs <- raw_kobo %>%
   pluck("wgs_repeat") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`) %>%
-  mutate(uuid = paste0("wgs_", roster_index))
+  mutate(uuid = wgs_instance_name) %>%
+  distinct(uuid, .keep_all = T) %>%
+  select(any_of(c(contains("wgs"),contains("wgq"), contains("instance"), contains("index"),contains("uuid"))))
 
 hh_roster <- raw_kobo %>%
   pluck("roster") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`) %>%
-  mutate(uuid = paste0("hh_", roster_index))
+  mutate(uuid = person_id) %>%
+  distinct(uuid, .keep_all = T)
 
 edu_roster <- raw_kobo %>%
   pluck("edu_ind") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`)  %>%
-  mutate(uuid = paste0("edu_", roster_index))
+  mutate(uuid = paste0("edu_", roster_index)) %>%
+  select(any_of(c(contains("edu_"),contains("instance"), contains("index"),contains("uuid"))))
+
 
 child_feeding <- raw_kobo %>%
   pluck("child_feeding") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`) %>%
-  mutate(uuid = paste0("child_feeding_", roster_index))
+  mutate(uuid = child_instance_name) %>%
+  distinct(uuid, .keep_all = T)
+
 
 health_roster <- raw_kobo %>%
   pluck("health_ind") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`)  %>%
-  mutate(uuid = paste0("health", roster_index))
+  mutate(uuid = health_instance_name) %>%
+  distinct(uuid, .keep_all = T)
+
 
 child_vacination_roster <- raw_kobo %>%
   pluck("child_vacination") %>%
   rename(index = `_parent_index`,
          roster_index = `_index`) %>%
-  mutate(uuid = paste0("child_vacc", roster_index))
+  mutate(uuid = vacination_instance_name) %>%
+  distinct(uuid, .keep_all = T) %>%
+  select(c(-contains('cm_income'), -contains('prot_')))
+
+nut_ind_roster <- raw_kobo %>%
+  pluck("nut_ind") %>%
+  rename(index = `_parent_index`,
+         roster_index = `_index`) %>%
+  mutate(uuid = nut_person_id) %>%
+  distinct(uuid, .keep_all = T)
+
 
 died_member_roster <- raw_kobo %>%
   pluck("died_member") %>%
@@ -66,7 +86,7 @@ died_member_roster <- raw_kobo %>%
 list_all_data <- list("main" = raw_kobo_data, "WGS" = wgs, "hh_roster" = hh_roster,
                       "education" = edu_roster, "child_feeding" = child_feeding,
                       "health" = health_roster, "child_vaccination" = child_vacination_roster,
-                      "mortality" = died_member_roster)
+                      "nutrition" = nut_ind_roster, "mortality" = died_member_roster)
 
 
 list_all_data %>%
@@ -161,6 +181,9 @@ data_valid_date <- data_in_processing %>%
 
 master_settlement <- read_excel("02_input/05_site_data/Site_Master_List.xlsx")
 main_data <- data_valid_date %>% left_join(master_settlement, by ="settlement_idp")###join sample name with main data
+
+## can we find a way to add UoA, hexid and cluster ID In? Based on whether it's idp or not and region / district selected.
+
 
 ############### GIS ########################
 
@@ -284,9 +307,6 @@ main_cleaning_log <-  checked_main_data %>%
 ###################################~~~ Roster data cleaning ~~~ ####################################
 #------------------------------------------------------------------------------------------------------#
 
-
-
-
 main_to_join <- main_data %>%
   dplyr::select(admin_1,admin_2,today,enum_id,resp_gender, enum_gender,
                 hoh_gender,settlement_idp,fo_in_charge,Name,deviceid,instance_name, index)
@@ -302,7 +322,7 @@ trans_roster <- function(data, id_name) {
 }
 
 #--------------------------------------------------------------------------------------------------------#
-###################################### HH Roaster data cleaning is here #################################
+###################################### HH Roaster data cleaning  ########################################
 #------------------------------------------------------------------------------------------------------#
 
 
@@ -578,9 +598,9 @@ health_cleaning_log <-  checked_health_data %>%
   )
 
 
-##########################################################################################################
-##################################HH child_vacination data cleaning is here########################
-########################################################################################################
+#------------------------------------------------------------------------#
+##################### HH child_vacination data cleaning ##################
+#------------------------------------------------------------------------#
 
 child_vacination_roster_bad_removed <- child_vacination_roster %>% #remove surveys that will be deleted
   trans_roster()
@@ -648,7 +668,7 @@ died_cleaning_log <-  checked_died_member_data %>%
   )
 
 #------------------------------------------------------------------------#
-########################## fcs data is here ##############################
+########################## fcs data ######################################
 #------------------------------------------------------------------------#
 
 ### this ultimately gets added in but i dont know why / whether we can just replace with our own checks
@@ -663,8 +683,7 @@ fcs_data<- fcs_data %>%
   select(-c("invalid","explanation")) %>%
   mutate(check_binding= paste0(question,uuid))
 
-
-###Add the metadata to fo cleaning to match my other logs
+## metadata added here so clogs are standardised
 fcs_data$admin_1 <- main_data$admin_1[match(fcs_data$uuid, main_data$uuid)]#region
 fcs_data$admin_2 <- main_data$admin_2[match(fcs_data$uuid, main_data$uuid)]#district
 fcs_data$today <- main_data$today[match(fcs_data$uuid, main_data$uuid)]#today
@@ -679,8 +698,6 @@ fcs_data$deviceid <- main_data$deviceid[match(fcs_data$uuid, main_data$uuid)]#Na
 #------------------------------------------------------------------------#
 ########################## output clogs ##################################
 #------------------------------------------------------------------------#
-
-
 
 final_clog <- bind_rows(
   main_cleaning_log$cleaning_log %>% mutate(clog_type = "main"),
@@ -730,7 +747,7 @@ cleaning_log <- map(common_groups, function(g) {
   )
 })
 
-
+options(openxlsx.na.string = "")
 cleaning_log %>% purrr::map(~ cleaningtools::create_xlsx_cleaning_log(.[],
                                                                       cleaning_log_name = "cleaning_log",
                                                                       change_type_col = "change_type",
