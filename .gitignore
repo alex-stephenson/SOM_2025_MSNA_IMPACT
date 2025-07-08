@@ -27,3 +27,4 @@ rsconnect/
 
 # geospatial files
 02_input/03_sampling
+03_output/05_sampling

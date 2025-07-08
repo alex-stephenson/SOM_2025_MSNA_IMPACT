@@ -20,7 +20,7 @@ idp_sheet  <- "CCCM IDP Site List (Verified)"
 
 # CRS & grid
 crs_utm    <- 32638
-hex_size    <- 2598.1  # 1 km^2
+hex_size    <- 1000  # 1 km^2
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Read & prep admin + pop raster + IDP points
@@ -98,7 +98,7 @@ idp_buffers <- idp_sites %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. Create 2.5 km hex grid over regions & punch out IDP buffers
+# 3. Create 1 km hex grid over regions & punch out IDP buffers
 # ──────────────────────────────────────────────────────────────────────────────
 # make grid over bay bounding box
 hex_grid <- st_make_grid(district, cellsize = hex_size, square = FALSE) %>%
@@ -210,7 +210,7 @@ st_write(hex_urban_centers, "03_output/05_sampling/urban_hc/urban_hc_hexagons.sh
 # ──────────────────────────────────────────────────────────────────────────────
 out_df <- hex_urban_centers %>%
   st_drop_geometry() %>%
-  select(hex_ID, pop_total, HH_total, idp_pop, prop_idp, dens_km2, cluster_id, unit_of_analysis)
+  select(hex_ID, pop_total, HH_total, idp_pop, prop_idp, dens_km2, cluster_id, ADM2_EN, unit_of_analysis)
 
 write.csv(out_df, "03_output/05_sampling/UoA_Urban.csv", row.names = FALSE)
 
