@@ -30,7 +30,7 @@ library(robotoolbox)
 library(impactR4PHU)
 
 
-date_to_filter <- "2025-06-26"
+date_to_filter <- "2025-07-09"
 date_time_now <- format(Sys.time(), "%b_%d_%Y_%H%M%S")
 
 source("00_src/00_utils.R")
@@ -40,17 +40,13 @@ source("00_src/00_utils.R")
 # ──────────────────────────────────────────────────────────────────────────────
 
 geo_ref_data <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_SOM_MSNA_2025.xlsx", sheet = "sample_frame_SOM_MSNA_2025") %>%
-  select(unit_of_analysis, district, hex_ID, survey_buffer)
+  select(unit_of_analysis, district, admin_2, hex_ID, survey_buffer)
 
+# read in the FO/district mapping
+fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
+  rename(fo_in_charge = FO_In_Charge)
 
-geo_admin1 <- geo_ref_data %>%
-  distinct(admin_1_pcode, admin_1_name)
-geo_admin2 <- geo_ref_data %>%
-  distinct(admin_2_pcode, admin_2_name)
-geo_admin3 <- geo_ref_data %>%
-  distinct(admin_3_pcode, admin_3_name)
-
-
+point_data <- readxl::read_excel("04_tool/sample_points.xlsx")
 
 kobo_tool_name <- "04_tool/REACH_SOM2503_MSNA_2025_IPC.xlsx" ## make sure this gets updated
 questions <- read_excel(kobo_tool_name, sheet = "survey")
@@ -72,12 +68,10 @@ uuid_names <- questions %>%
   filter(calculation == "uuid()") %>%
   pull(name)
 
-uuid_names[-1]
-names(raw_kobo)
 
 roster_uuids <- tibble(
   name         = names(raw_kobo)[-1],
-  uuids        = uuid_names[2:7],
+  uuids        = uuid_names[-1],
   repeat_table = names(raw_kobo)[-1]
 )
 
@@ -109,30 +103,34 @@ if (version_count > 1) {
   print("~~~~~~There are multiple versions of the tool in use~~~~~~")
 }
 
-# read in the FO/district mapping
-fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
-  rename(fo_in_charge = FO_In_Charge)
-
 # # join the fo to the dataset
 data_with_fo <- raw_kobo_data %>%
-  left_join(fo_district_mapping %>% select(-admin_1_name), by = join_by("admin1" == "admin_1_pcode"))
+  left_join(fo_district_mapping)
 
-data_with_fo <- data_with_fo %>%
-  filter(!is.na(fo_in_charge))
+if (sum(is.na(data_with_fo$fo_in_charge)) > 0) {
+  stop("~~~~~~!!Join of FO not entirely successful!!~~~~~~")
+}
+
+## delete after
+data_with_fo <- raw_kobo_data %>%
+  mutate(fo_in_charge = "isse") %>%
+  mutate(length_valid = "Okay",
+         interview_duration = 30)
+
+data_in_processing <- data_with_fo
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Filter for time and export deleted surveys
 # ──────────────────────────────────────────────────────────────────────────────
 
-mindur <- 19
+mindur <- 20
 maxdur <- 150
 
-
+asset_id = "awmTiByfughgxgxpTk2uc3"
 kobo_data_metadata <- get_kobo_metadata(dataset = data_with_fo, un = "alex_stephenson", asset_id = asset_id, remove_geo = T)
 data_with_time <- kobo_data_metadata$df_and_duration
 raw_metadata_length <- kobo_data_metadata$audit_files_length
 write_rds(raw_metadata_length, "03_output/01_raw_data/raw_metadata.rds")
-
 
 data_in_processing <- data_with_time %>%
   mutate(length_valid = case_when(
@@ -147,7 +145,7 @@ remove_deletions <- readxl::read_excel("02_input/08_remove_deletions/remove_dele
 
 deletion_log <- data_in_processing %>%
   filter(length_valid != "Okay") %>%
-  select(uuid, length_valid, admin1, admin_2_camp, admin_3_camp, enum_id, interview_duration) %>%
+  select(uuid, length_valid, admin_1, admin_3, admin_3, enum_id, interview_duration) %>%
   left_join(raw_kobo_data %>% select(uuid, index), by = "uuid") %>%
   filter(! uuid %in% remove_deletions$uuid)
 
@@ -164,25 +162,27 @@ data_valid_date <- data_in_processing %>%
     TRUE ~ length_valid
   )) %>%
   filter(length_valid == "Okay") %>%
-  filter(today == max(today))
+  filter(as_date(today) == date_to_filter)
 
-main_data <- data_valid_date %>%
-  addindicators::add_eg_fcs(cutoffs = "normal")
-
+main_data <- data_valid_date
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. GIS Checks
 # ──────────────────────────────────────────────────────────────────────────────
 
-gps<-main_data %>% filter(consent=="yes") %>%
-  select(uuid,enum_id,today, survey_modality, contains("camp"),contains("sub_camp"),contains("point_number"), contains("check_ptno_insamples"), contains("validate_ptno"), contains("pt_sample_lat"), contains("pt_sample_lon"), contains("dist_btn_sample_collected"), contains("reasons_why_far"), contains("geopoint"))
+gps<-main_data %>%
+  select(uuid,enum_id,today, access_location, contains("admin"), point_id, contains("gps"), distance_to_site)
 write.xlsx(gps , paste0("03_output/03_gps/gps_checks_", lubridate::today(), ".xlsx"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Apply the checks to the main data
 # ──────────────────────────────────────────────────────────────────────────────
 
-clog_metadata <- c("admin1", "admin_2_camp", "admin_3_camp", "today","enum_id", "fo_in_charge", "index")
-exclude_patterns <- c("geopoint", "gps", "_index", "_submit", "submission", "_sample_", "^_id$", "^rand", "^_index$","_n","enum_id", "ind_potentially_hoh")
+## add FCS calc for clogs
+main_data <- data_valid_date %>%
+  addindicators::add_eg_fcs(cutoffs = "normal")
+
+clog_metadata <- c("admin_1", "admin_2", "admin_3", "today","enum_id", "fo_in_charge", "index")
+exclude_patterns <- c("geopoint", "gps", "_index", "_submit", "submission", "_sample_", "^_id$", "^rand", "^_index$","_n","enum_id", "ind_potentially_hoh", "_person_id", "_ind_age", "index", "_photo_URL", "fo_in_charge", "uuid")
 
 ## calculate other questions
 others_to_check <- questions %>%
@@ -190,17 +190,20 @@ others_to_check <- questions %>%
          str_detect(name, "other")) %>%
   pull(name)
 
-df_list_logical_checks <- read_csv("02_input/01_logical_checks/check_list.csv")
+df_list_logical_checks <- read_csv("02_input/01_logical_checks/main_data_checks.csv") %>% head(3)
 
 excluded_questions <- questions %>%
   filter(type != "integer" & type != "calculate") %>%
+  filter(name != "muac_cm") %>% ## MUAC is a text field with regex for digits so need to manually remove
   pull(name) %>%
   unique()
 
-outliers_exclude_main <- calc_outlier_exclusion(raw_kobo_data)
+outliers_exclude_main <- calc_outlier_exclusion(raw_kobo_data,
+                                                excluded_q = excluded_questions,
+                                                exclude_patt = exclude_patterns)
 
 checked_main_data <-  main_data %>%
-  run_standard_checks(value_check = TRUE,
+  run_standard_checks(survey = questions, choices = choices, value_check = TRUE,
                       outlier_check = TRUE,
                       columns_not_to_check_outliers = outliers_exclude_main,
                       other_check = TRUE,
@@ -219,8 +222,8 @@ main_cleaning_log <-  checked_main_data %>%
 # ──────────────────────────────────────────────────────────────────────────────
 
 main_to_join <- main_data %>%
-  dplyr::select(admin1, admin_2_camp, admin_3_camp, today,enum_id,resp_gender, enum_gender,
-                hoh_gender,fo_in_charge,deviceid,instance_name, index)
+  dplyr::select(admin_1, admin_2, admin_3, today,enum_id, resp_gender, enum_gender,
+                hoh_gender,fo_in_charge,instance_name, index)
 
 
 trans_roster <- function(data) {
@@ -239,31 +242,42 @@ purrr::walk2(roster_outputs_trans, roster_uuids$name, ~assign(.y, .x, envir = .G
 #  5.1 HH Roster data cleaning
 # ──────────────────────────────────────────────────────────────────────────────
 
-outliers_exclude_roster <- calc_outlier_exclusion(roster)
+outliers_exclude_roster <- calc_outlier_exclusion(roster, excluded_q = c(excluded_questions, 'note_resp'), exclude_patt = exclude_patterns)
 
 checked_hh_roster <- roster %>%
   run_standard_checks(
+    survey = questions, choices = choices,
     value_check = TRUE,
-    outlier_check = FALSE,
-    other_check = TRUE,
-    logical_check = FALSE,
-    columns_to_check_others = outliers_exclude_roster)
+    outlier_check = TRUE,
+    columns_not_to_check_outliers = outliers_exclude_roster,
+    other_check = FALSE,
+    logical_check = FALSE)
 
 hh_roster_cleaning_log <-  checked_hh_roster %>%
   create_combined_log() %>%
-  add_info_to_cleaning_log(
-    information_to_add = clog_metadata
-  )
-
+  add_info_to_cleaning_log(information_to_add = clog_metadata)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  5.2 WGS data cleaning
 # ──────────────────────────────────────────────────────────────────────────────
 
-df_list_logical_wgs <- read_csv("02_input/01_logical_checks/check_list_wgs.csv")
+df_list_logical_wgs <- read_csv("02_input/01_logical_checks/wgs_logical_checks.csv")
 
-checked_wgs <- wgs %>%
+wgs_repeat %>%
+  mutate(wgs_age = as.numeric(wgs_age)) %>%
+  filter(wgs_age >= 5) %>% View()
+  filter(rowSums(select(., c(wgq_vision, wgq_hearing, wgq_mobility, wgq_cognition, wgq_self_care, wgq_communication))
+                              %in% c("alot_difficulty", "cannot_all"), na.rm = T) > 3)
+
+
+checked_wgs <- wgs_repeat %>%
+  mutate(
+    wgq_sum = rowSums(across(
+      c(wgq_vision, wgq_hearing, wgq_mobility, wgq_cognition, wgq_self_care, wgq_communication),
+      ~ .x %in% c("alot_difficulty", "cannot_all")), na.rm = TRUE)
+  ) %>%
   run_standard_checks(
+    survey = questions, choices = choices,
     value_check = FALSE,
     outlier_check = FALSE,
     other_check = FALSE,
@@ -272,22 +286,20 @@ checked_wgs <- wgs %>%
 
 checked_wgs_cleaning_log <- checked_wgs %>%
   create_combined_log() %>%
-  add_info_to_cleaning_log(
-    information_to_add = clog_metadata
-  )
+  add_info_to_cleaning_log(information_to_add = clog_metadata)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  5.3 Child feeding data cleaning
 # ──────────────────────────────────────────────────────────────────────────────
 
-outliers_exclude_child_feeding <- calc_outlier_exclusion(child_feeding)
-
+outliers_exclude_child_feeding <- calc_outlier_exclusion(child_feeding, excluded_q = c(excluded_questions, 'note_resp'), exclude_patt = exclude_patterns)
 
 checked_child_feeding <- child_feeding %>%
   run_standard_checks(
+    survey = questions, choices = choices,
     value_check = TRUE,
     outlier_check = TRUE,
-    columns_not_to_check_outliers = c(outliers_exclude_child_feeding, "time_breastfeeding_hours"),
+    columns_not_to_check_outliers = c(outliers_exclude_child_feeding),
     other_check = TRUE,
     columns_to_check_others = names(child_feeding %>% select(contains(others_to_check))),
     logical_check = FALSE
@@ -295,53 +307,49 @@ checked_child_feeding <- child_feeding %>%
 
 child_feeding_cleaning_log <-  checked_child_feeding %>%
   create_combined_log() %>%
-  add_info_to_cleaning_log(
-    information_to_add = clog_metadata
-)
+  add_info_to_cleaning_log(information_to_add = clog_metadata)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  5.4 Child nutrition Roster data cleaning
 # ──────────────────────────────────────────────────────────────────────────────
 
-### no planned checks
+outliers_exclude_nut_ind <- calc_outlier_exclusion(nut_ind, excluded_q = excluded_questions, exclude_patt = exclude_patterns)
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  5.4 MUAC data cleaning
-# ──────────────────────────────────────────────────────────────────────────────
+checked_child_feeding <- nut_ind %>%
+  run_standard_checks(
+    survey = questions, choices = choices,
+    value_check = TRUE,
+    outlier_check = TRUE,
+    columns_not_to_check_outliers = c(outliers_exclude_nut_ind, "nut_person_id", "nut_ind_pos", "nut_ind_gender", "muac_calc"),
+    other_check = TRUE,
+    columns_to_check_others = names(nut_ind %>% select(contains(others_to_check))),
+    logical_check = FALSE
+  )
 
-## need to do outliers for MUAC, and maybe a logical check??
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  5.4 Child vaccination data cleaning
-# ──────────────────────────────────────────────────────────────────────────────
-
-#### cant think of any checks
+child_feeding_cleaning_log <-  checked_child_feeding %>%
+  create_combined_log() %>%
+  add_info_to_cleaning_log(information_to_add = clog_metadata)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Mortality data cleaning
 # ──────────────────────────────────────────────────────────────────────────────
 
-df_list_logical_mortality <- read_csv("02_input/01_logical_checks/check_list_wgs.csv")
-
-outliers_exclude_mortality <- calc_outlier_exclusion(died_member)
+outliers_exclude_mortality <- calc_outlier_exclusion(died_member, excluded_q = excluded_questions, exclude_patt = exclude_patterns)
 
 died_member_checked <- died_member %>%
   run_standard_checks(
+    survey = questions, choices = choices,
     value_check = TRUE,
     outlier_check = TRUE,
     columns_not_to_check_outliers = outliers_exclude_mortality,
     other_check = TRUE,
     columns_to_check_others = names(died_member %>% select(contains(others_to_check))),
-    logical_check = TRUE,
-    logical_list = df_list_logical_mortality,
-  )
+    logical_check = FALSE
+    )
 
 died_member_cleaning_log <-  died_member_checked %>%
   create_combined_log() %>%
-  add_info_to_cleaning_log(
-    information_to_add = clog_metadata
-  )
+  add_info_to_cleaning_log(information_to_add = clog_metadata)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  6. Clog output
