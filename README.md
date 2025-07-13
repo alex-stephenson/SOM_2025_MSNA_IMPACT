@@ -1,6 +1,6 @@
 ## About The Project
 
-The Multi Sectoral Needs Assessment (MSNA) is IMPACT REACH's flagship research cycle. 
+The Multi Sectoral Needs Assessment (MSNA) is IMPACT REACH's flagship research cycle. This code is relevant to the Somalia 2025 MSNA, specifically focused on the IPC submission. However, it has been written as much as possible to be reusable in future iterations. 
 
 ## Using this Repo
 
