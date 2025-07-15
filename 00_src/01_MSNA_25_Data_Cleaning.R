@@ -48,6 +48,8 @@ fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_
 
 point_data <- readxl::read_excel("04_tool/sample_points.xlsx")
 
+site_data <- readxl::read_excel("02_input/05_site_data/Site_Master_List.xlsx")
+
 kobo_tool_name <- "04_tool/REACH_SOM2503_MSNA_2025_IPC.xlsx" ## make sure this gets updated
 questions <- read_excel(kobo_tool_name, sheet = "survey")
 choices <- read_excel(kobo_tool_name, sheet = "choices")
@@ -140,7 +142,7 @@ remove_deletions <- readxl::read_excel("02_input/08_remove_deletions/remove_dele
 
 deletion_log <- data_in_processing %>%
   filter(length_valid != "Okay") %>%
-  select(uuid, length_valid, admin_1, admin_3, admin_3, enum_id, interview_duration) %>%
+  select(uuid, length_valid, admin_1, admin_2, admin_3, enum_id, interview_duration) %>%
   left_join(raw_kobo_data %>% select(uuid, index), by = "uuid") %>%
   filter(! uuid %in% remove_deletions$uuid)
 
@@ -148,6 +150,13 @@ deletion_log %>%
   mutate(comment = paste0("Interview length is ", length_valid)) %>%
   select(-length_valid) %>%
   writexl::write_xlsx(., paste0("03_output/02_deletion_log/deletion_log.xlsx"))
+
+data_in_processing %>%
+  filter(length_valid != "Okay") %>%
+  left_join(site_data %>% select(idp_hex_id = settlement_idp, Name)) %>%
+  select(uuid, length_valid, admin_1_name, admin_2_name, admin_3, point_id, idp_hex_id, Name, enum_id, interview_duration) %>%
+  writexl::write_xlsx(., paste0("03_output/02_deletion_log/detailed_deletions.xlsx"))
+
 
 ## filter only valid surveys and for the specific date
 data_valid_date <- data_in_processing %>%

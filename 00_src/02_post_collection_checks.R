@@ -543,6 +543,48 @@ hh_ratio %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 5. Review the LCSI scores
+# ──────────────────────────────────────────────────────────────────────────────
+
+lcsi_uuids <- all_raw_data$main %>% filter(fsl_fcs_category == "Poor" &
+                                if_all(
+                                  c(
+                                    fsl_lcsi_crisis1,
+                                    fsl_lcsi_crisis2,
+                                    fsl_lcsi_crisis3,fsl_lcsi_crisis4, fsl_lcsi_crisis5,
+                                    fsl_lcsi_emergency1,
+                                    fsl_lcsi_emergency2,
+                                    fsl_lcsi_emergency3,fsl_lcsi_emergency4, fsl_lcsi_emergency5,
+                                    fsl_lcsi_stress1,
+                                    fsl_lcsi_stress2,
+                                    fsl_lcsi_stress3,
+                                    fsl_lcsi_stress4, fsl_lcsi_stress5, fsl_lcsi_stress6
+                                  ),
+                                  ~ .x == "no_had_no_need"
+                                )) %>% pull(`_id`)
+
+
+
+raw_metadata_length <- read_rds("03_output/01_raw_data/raw_metadata.rds")
+fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
+  rename(fo_in_charge = FO_In_Charge)
+
+avg_time <- raw_metadata_length %>% mutate(metadata_duration_seconds = end - start) %>%
+  filter(str_detect(name, "lcsi")) %>% group_by(name) %>% summarise(average_time = mean(metadata_duration, na.rm = T))
+
+problem_questions <- raw_metadata_length %>% mutate(duration_seconds = end - start) %>% filter(`_id` %in%  lcsi_uuids) %>%
+  filter(str_detect(name, "lcsi")) %>% select(`_id`, name, `new-value`, duration_seconds) %>%
+  left_join(all_raw_data$main %>% select(`_id`, enum_id, admin_2)) %>%
+  left_join(fo_district_mapping %>% select(admin_2, admin_2_name, fo_in_charge)) %>%
+  select(-admin_2) %>%
+  filter(! str_detect(name, "note")) %>%
+  group_by(enum_id) %>%
+  summarise(avg_time_spent = median(duration_seconds))
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 5. Review the soft duplicates
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -613,30 +655,26 @@ similar_survey_output %>%
 # 6. Review FCS Scores
 # ──────────────────────────────────────────────────────────────────────────────
 
-clean_data_logs$main$my_clean_data_final %>%
-  ggplot(aes(FCS)) +
-  geom_histogram() +
-  geom_vline(xintercept =  70, colour = "orangered3", linetype = "dashed", linewidth = 0.5) +
-  geom_vline(xintercept =  10, colour = "orangered3", linetype = "dashed", linewidth = 0.5) +
-  facet_wrap(~ camp_or_hc)
-
-clean_data_logs$main$my_clean_data_final %>%
-  group_by(camp_or_hc) %>%
-  summarise(avg_fcs = mean(fsl_fcs_score, na.rm = T))
-
-clean_data_logs$main$my_clean_data_final %>%
-  ggplot(., aes(x= camp_or_hc, y = FCS)) +
-  geom_boxplot(fill="slateblue", alpha=0.2) +
-  geom_jitter(color="black", size=0.2, alpha=0.5) +
-  xlab("")
-
-clean_data$main$my_clean_data_final %>%
+#clean_data_logs$main$my_clean_data_final %>%
+all_raw_data$main %>%
+  mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
   ggplot(aes(fsl_fcs_score)) +
   geom_histogram() +
   geom_vline(xintercept =  70, colour = "orangered3", linetype = "dashed", linewidth = 0.5) +
   geom_vline(xintercept =  10, colour = "orangered3", linetype = "dashed", linewidth = 0.5) +
-  facet_wrap(~ camp_or_hc)
+  facet_wrap(~ admin_3)
 
-clean_data$main$my_clean_data_final %>%
-  filter(fsl_fcs_score < 10) %>%
-  nrow()
+#clean_data_logs$main$my_clean_data_final %>%
+all_raw_data$main %>%
+  mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
+  group_by(admin_3) %>%
+  summarise(avg_fcs = mean(fsl_fcs_score, na.rm = T))
+
+#clean_data_logs$main$my_clean_data_final %>%
+all_raw_data$main %>%
+  mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
+  ggplot(., aes(x= admin_3, y = fsl_fcs_score)) +
+  geom_boxplot(fill="slateblue", alpha=0.2) +
+  geom_jitter(color="black", size=0.2, alpha=0.5) +
+  xlab("")
+
