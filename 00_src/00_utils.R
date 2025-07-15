@@ -249,8 +249,8 @@ create_xlsx_cleaning_log <- function(write_list,
 
 run_standard_checks <- function(data,
                                 uuid_column = "uuid",
-                                survey = questions,
-                                choices = choices,
+                                survey,
+                                choices,
                                 value_check = TRUE,
                                 outlier_check = TRUE,
                                 other_check = TRUE,
@@ -263,6 +263,7 @@ run_standard_checks <- function(data,
 
   result <- data
 
+
   if (other_check == TRUE) {
     result <- result %>%
       check_others(
@@ -270,6 +271,8 @@ run_standard_checks <- function(data,
         columns_to_check = columns_to_check_others
       )
   }
+
+  message("Checked others")
 
   if (value_check == TRUE) {
   result <- result %>%
@@ -279,6 +282,8 @@ run_standard_checks <- function(data,
       values_to_look = c(-999, -1)
     )
   }
+
+  message("Checked values")
 
   if (outlier_check == TRUE) {
   result <- result %>%
@@ -295,27 +300,33 @@ run_standard_checks <- function(data,
     )
   }
 
+  message("Checked outliers")
+
+
   if (logical_check == TRUE) {
     result <- result %>%
       check_logical_with_list(
         uuid_column = uuid_column,
         list_of_check = logical_list,
         check_id_column = "check_id",
-        check_to_perform_column = "check_to_perform",
+        check_to_perform_column = "check",
         columns_to_clean_column = "columns_to_clean",
         description = "description",
         bind_checks = TRUE
       )
   }
 
+  message("Checked logical")
+
+
   return(result)
 }
 
 
-calc_outlier_exclusion <- function(name) {
-  excluded_questions_in_data <- intersect(colnames(name), excluded_questions)
-  outlier_cols_not_4_checking <- name %>%
-    select(matches(paste(exclude_patterns, collapse = "|"))) %>%
+calc_outlier_exclusion <- function(data, excluded_q, exclude_patt) {
+  excluded_questions_in_data <- intersect(colnames(data), excluded_q)
+  outlier_cols_not_4_checking <- data %>%
+    select(matches(paste(exclude_patt, collapse = "|"))) %>%
     colnames()
   return(c(excluded_questions_in_data ,outlier_cols_not_4_checking))
 }

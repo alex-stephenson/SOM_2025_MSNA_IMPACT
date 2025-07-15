@@ -33,6 +33,9 @@ library(addindicators)
 # 1. Read in all data (raw, clogs, FO, tool)
 # ──────────────────────────────────────────────────────────────────────────────
 
+geo_ref_data <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_SOM_MSNA_2025.xlsx", sheet = "sample_frame_SOM_MSNA_2025") %>%
+  select(unit_of_analysis, district, admin_2, hex_ID, survey_buffer)
+
 # read in the FO/district mapping
 fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
   rename(fo_in_charge = FO_In_Charge)
@@ -41,7 +44,7 @@ fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_
 all_raw_data <- read_rds("03_output/01_raw_data/all_raw_data.rds")
 
 ## tool
-kobo_tool_name <- "04_tool/REACH_KEN_2025_MSNA-Tool_v7.xlsx"
+kobo_tool_name <- "../../01_MSNA 2025_ Research Design/REACH_SOM2503_MSNA_2025_IPC.xlsx"
 kobo_survey <- read_excel(kobo_tool_name, sheet = "survey")
 kobo_choice <- read_excel(kobo_tool_name, sheet = "choices")
 
@@ -297,7 +300,7 @@ if(! is_empty(file_list)) {
 
   all_raw_data$main %>%
     filter(! index %in% deletion_log$index) %>%
-    writexl::write_xlsx(., "03_output/05_clean_data/final_clean_main_data.xlsx")
+    writexl::write_xlsx(., "03_output/06_clean_data/final_clean_main_data.xlsx")
 
   message("✅ Outputted raw Data")
 
@@ -496,7 +499,7 @@ if(! is_empty(file_list)) {
     write_rds(., "03_output/06_final_cleaning_log/final_all_r_object.rds")
 
   clean_data_logs$main$my_clean_data_final %>%
-    writexl::write_xlsx(., "03_output/05_clean_data/final_clean_main_data.xlsx")
+    writexl::write_xlsx(., "03_output/06_clean_data/final_clean_main_data.xlsx")
 
   clean_data_logs$main$raw_data %>%
     writexl::write_xlsx(., "03_output/01_raw_data/raw_data_main.xlsx")
@@ -506,6 +509,37 @@ if(! is_empty(file_list)) {
 
 }
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Review the HH_size vs UoA average
+# ──────────────────────────────────────────────────────────────────────────────
+
+admin_lookup <- geo_ref_data %>% select(admin_2, district, unit_of_analysis) %>% distinct() %>%
+  mutate(admin_3 = ifelse(str_detect(unit_of_analysis, "IDP"), "idp_sites", "hc"))
+
+UoA_hh_size <- all_raw_data$main %>%
+  left_join(admin_lookup) %>%
+  group_by(unit_of_analysis) %>%
+  summarise(avg_UoA = mean(hh_size, na.rm = T),
+            count_region = n())
+
+enum_hh_size <- all_raw_data$main %>%
+  left_join(admin_lookup) %>%
+  group_by(unit_of_analysis, enum_id) %>%
+  summarise(avg_enum = mean(hh_size, na.rm = T),
+            surveys_done = n()) %>%
+  ungroup() %>%
+  filter(surveys_done > 3)
+
+
+hh_ratio <- enum_hh_size %>%
+  left_join(UoA_hh_size, by = join_by("unit_of_analysis")) %>%
+  mutate(hh_ratio = avg_enum / avg_UoA) %>%
+  filter(hh_ratio < 0.66)
+
+hh_ratio %>%
+  writexl::write_xlsx(., "03_output/08_hh_size_check/hh_size_check.xlsx")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
