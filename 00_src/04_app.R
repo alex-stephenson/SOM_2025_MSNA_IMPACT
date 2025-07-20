@@ -35,7 +35,7 @@ actual_burndown <- read_csv("02_input/06_dashboard_inputs/actual_burndown.csv")
 {
   # UI
   ui <- dashboardPage(
-    dashboardHeader(title = "KEN MSNA 2025 Field Dashboard"),
+    dashboardHeader(title = "SOM MSNA 2025 Field Dashboard"),
     dashboardSidebar(
       collapsed = TRUE,
       sidebarMenu(
@@ -108,7 +108,7 @@ actual_burndown <- read_csv("02_input/06_dashboard_inputs/actual_burndown.csv")
     output$plot_burndown <- renderPlot({
 
       total_tasks <- sum(sites_done$Surveys_Target)
-      days <- 10
+      days <- 14
 
       # Ideal burndown data (linear decrease)
       ideal_burndown <- data.frame(

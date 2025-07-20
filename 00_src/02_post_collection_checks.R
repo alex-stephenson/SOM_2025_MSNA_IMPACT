@@ -53,11 +53,11 @@ file_list <- list.files(path = "01_cleaning_logs", recursive = TRUE, full.names 
 
 file_list <- file_list %>%
   keep(~ str_detect(.x, "complete")) %>%
-  keep(~ str_detect(.x, "final"))
+  keep(~ str_detect(.x, "validated"))
 
 # Function to read and convert all columns to character
 read_and_clean <- function(file, sheet) {
-  read_excel(file, sheet = sheet) %>%
+  read_excel(file, sheet = sheet, col_types = "text") %>%
     mutate(across(everything(), as.character)) %>%   # Convert all columns to character
     mutate(file_path = file)
 }
@@ -80,7 +80,8 @@ if(! is_empty(file_list)) {
 
   cleaning_logs <- cleaning_logs %>%
     filter(! is.na(change_type)) %>%
-    mutate(new_value = ifelse(change_type == "no_action" & is.na(new_value), old_value, new_value))
+    mutate(new_value = ifelse(change_type == "no_action" & is.na(new_value), old_value, new_value)) %>%
+    filter(!str_detect(question, "fcs_weight_")) ## these questions included on first day but shouldnt be
 
   ## now we split the clogs by the clog type, we manually coded at the end of the last script.
 
@@ -117,7 +118,7 @@ if(! is_empty(file_list)) {
   cleaning_log_deletions <- cleaning_logs %>%
     filter(change_type == "remove_survey") %>%
     mutate(interview_duration = "") %>%
-    select(uuid, admin1, admin_2_camp, admin_3_camp, enum_id,interview_duration, index, comment = issue) %>%
+    select(uuid, admin_1, admin_2, admin_3, enum_id,interview_duration, index, comment = issue) %>%
     mutate(across(everything(), as.character))
 
   deletion_log <- bind_rows(all_dlogs, cleaning_log_deletions) %>%
@@ -297,10 +298,18 @@ if(! is_empty(file_list)) {
 
   message("✅ Outputted clean Data")
 
+  all_clean_data <- purrr::map(all_raw_data, function(x) {
 
-  all_raw_data$main %>%
-    filter(! index %in% deletion_log$index) %>%
+    x %>%
+      filter(! index %in% deletion_log$index)
+  }
+  )
+
+  all_clean_data$main %>%
     writexl::write_xlsx(., "03_output/06_clean_data/final_clean_main_data.xlsx")
+
+  all_clean_data %>%
+    write_rds(., "03_output/06_clean_data/final_data.rds")
 
   message("✅ Outputted raw Data")
 
@@ -410,6 +419,7 @@ if(! is_empty(file_list)) {
 
   ### add indicators to the nutrition section
   clean_data_logs$child_feeding$my_clean_data_final <- clean_data_logs$child_feeding$my_clean_data_final %>%
+    mutate(drink_yoghurt_yn = ifelse(yoghurt > 0, "yes", "no")) %>%
     impactR4PHU::add_iycf(
                           yes_value = "yes",
                           no_value = "no",
@@ -430,24 +440,24 @@ if(! is_empty(file_list)) {
                           iycf_6h = "tea_drink", # tea, coffee, herbal drinks (y/n)
                           iycf_6i = "broth_drink", # clear broth / soup (y/n)
                           iycf_6j = "other_drink", # other liquids (y/n)
-                          iycf_7a = "yoghurt_food", # yoghurt (NOT yoghurt drinks) (number)
-                          iycf_7b = "porridge_food",
-                          iycf_7c = "pumpkin_food", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
-                          iycf_7d = "plantain_food", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
-                          iycf_7e = "vegetables_food", # dark green leafy vegetables (y/n)
-                          iycf_7f = "other_vegetables", # other vegetables (y/n)
-                          iycf_7g = "fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
-                          iycf_7h = "other_fruits", # other fruits (y/n)
-                          iycf_7i = "liver", # organ meats (liver ,kidney, heart) (y/n)
-                          iycf_7j = "canned_meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
-                          iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
-                          iycf_7l = "eggs", # eggs (y/n)
-                          iycf_7m = "fish", # fish (fresh or dried fish or shellfish) (y/n)
-                          iycf_7n = "cereals", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
+                          iycf_7a = "yoghurt", # yoghurt (NOT yoghurt drinks) (number)
+                          iycf_7b = "cereals",
+                          iycf_7c = "vegetables", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
+                          iycf_7d = "root_vegetables", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
+                          iycf_7e = "leafy_vegetables", # dark green leafy vegetables (y/n)
+                          iycf_7f = "vegetables_other", # other vegetables (y/n)
+                          iycf_7g = "tropical_fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
+                          iycf_7h = "fruits_other", # other fruits (y/n)
+                          iycf_7i = "organ_meats", # organ meats (liver ,kidney, heart) (y/n)
+                          iycf_7j = "meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
+                          #iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
+                          iycf_7l = "egg", # eggs (y/n)
+                          iycf_7m = "seafood", # fish (fresh or dried fish or shellfish) (y/n)
+                          iycf_7n = "legumes", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
                           iycf_7o = "cheese", # cheeses (hard or soft cheeses) (y/n)
-                          iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
-                          iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
-                          iycf_7r = "other_solid",
+                          #iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
+                          #iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
+                          iycf_7r = "food_other",
                           iycf_8 = "times_solid", # times child ate solid/semi-solid foods (number),
                           uuid = "uuid") %>%
     mutate(across(starts_with("other_"), as.numeric)) %>%
@@ -493,10 +503,10 @@ if(! is_empty(file_list)) {
 
   all_cleaning_logs %>%
     filter(question != "index") %>%
-    writexl::write_xlsx(., "03_output/06_final_cleaning_log/final_agg_cleaning_log.xlsx")
+    writexl::write_xlsx(., "03_output/06_clean_data/final_agg_cleaning_log.xlsx")
 
   clean_data_logs %>%
-    write_rds(., "03_output/06_final_cleaning_log/final_all_r_object.rds")
+    write_rds(., "03_output/06_clean_data/final_all_r_object.rds")
 
   clean_data_logs$main$my_clean_data_final %>%
     writexl::write_xlsx(., "03_output/06_clean_data/final_clean_main_data.xlsx")
@@ -537,6 +547,16 @@ hh_ratio <- enum_hh_size %>%
   left_join(UoA_hh_size, by = join_by("unit_of_analysis")) %>%
   mutate(hh_ratio = avg_enum / avg_UoA) %>%
   filter(hh_ratio < 0.66)
+
+all_raw_data$main %>%
+  left_join(admin_lookup) %>%
+  group_by(unit_of_analysis) %>%
+  summarise(avg_HH_size = mean(hh_size), number_interviews = n())
+
+enum_hh_size %>%
+  filter(str_detect(unit_of_analysis, "Bay Urban IDP")) %>%
+  arrange(avg_enum)
+
 
 hh_ratio %>%
   writexl::write_xlsx(., "03_output/08_hh_size_check/hh_size_check.xlsx")

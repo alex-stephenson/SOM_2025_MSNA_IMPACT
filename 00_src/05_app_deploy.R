@@ -19,6 +19,8 @@ message("Loading data...")
 sampling_frame <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_SOM_MSNA_2025.xlsx", sheet = "sample_frame_SOM_MSNA_2025") %>%
   janitor::clean_names()
 
+site_data <- readxl::read_excel("02_input/05_site_data/Site_Master_List.xlsx")
+
 points_ref <- read_csv("04_tool/sample_points.csv") %>%
   janitor::clean_names()
 
@@ -72,12 +74,13 @@ admin_2_done <- sampling_frame %>%
   mutate(Complete = ifelse(Surveys_Done >= Surveys_Target, "Yes", "No")) %>%
   mutate(Complete = ifelse(is.na(Complete), "No", Complete))
 
-admin_2_done %>%
-  writexl::write_xlsx(., paste0("02_input/06_dashboard_inputs/completion_report.xlsx"))
+completion_report <- admin_2_done %>%
+  left_join(site_data %>% select(Name, hex_id = settlement_idp)) %>%
+  mutate(hex_id = ifelse(str_detect(hex_id, "H"), hex_id, paste0(Name, " : ", hex_id))) %>%
+  select(-Name)
 
-admin_2_done %>%
-  writexl::write_xlsx(., paste0("03_output/07_daily_completion/completion_report_", today(), ".xlsx"))
-
+writexl::write_xlsx(completion_report, paste0("02_input/06_dashboard_inputs/completion_report.xlsx"))
+writexl::write_xlsx(completion_report, paste0("03_output/07_daily_completion/completion_report_", today(), ".xlsx"))
 
 #--------------------------------------------------------
 # Site level Completion

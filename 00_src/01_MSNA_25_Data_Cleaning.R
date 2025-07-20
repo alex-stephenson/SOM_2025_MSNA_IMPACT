@@ -30,7 +30,7 @@ library(robotoolbox)
 library(impactR4PHU)
 
 
-date_to_filter <- "2025-07-13"
+date_to_filter <- "2025-07-17"
 date_time_now <- format(Sys.time(), "%b_%d_%Y_%H%M%S")
 
 source("00_src/00_utils.R")
@@ -46,11 +46,11 @@ geo_ref_data <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_
 fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
   rename(fo_in_charge = FO_In_Charge)
 
-point_data <- readxl::read_excel("04_tool/sample_points.xlsx")
+point_data <- read_csv("04_tool/sample_points.csv")
 
 site_data <- readxl::read_excel("02_input/05_site_data/Site_Master_List.xlsx")
 
-kobo_tool_name <- "04_tool/REACH_SOM2503_MSNA_2025_IPC.xlsx" ## make sure this gets updated
+kobo_tool_name <- "../../01_MSNA 2025_ Research Design/REACH_SOM2503_MSNA_2025_IPC.xlsx"
 questions <- read_excel(kobo_tool_name, sheet = "survey")
 choices <- read_excel(kobo_tool_name, sheet = "choices")
 
@@ -96,6 +96,19 @@ roster_outputs <- pmap(
 names(roster_outputs) <- roster_uuids$name
 
 roster_outputs[['main']] <- raw_kobo_data
+
+roster_outputs[['wgs_repeat']] <- roster_outputs[['wgs_repeat']] %>%
+  mutate(wgs_age = as.numeric(wgs_age)) %>%
+  filter(wgs_age >= 5)
+
+roster_outputs[['nut_ind']] <- roster_outputs[['nut_ind']] %>%
+  mutate(nut_ind_age = as.numeric(nut_ind_age)) %>%
+  filter(nut_ind_age < 5)
+
+roster_outputs[['child_feeding']] <- roster_outputs[['child_feeding']] %>%
+  mutate(child_age = as.numeric(child_age)) %>%
+  mutate(child_age_months = as.numeric(child_age_months)) %>%
+  filter(child_age < 2)
 
 roster_outputs %>%
   write_rds(., "03_output/01_raw_data/all_raw_data.rds")
@@ -176,8 +189,10 @@ main_data <- data_valid_date %>%
 # ──────────────────────────────────────────────────────────────────────────────
 
 gps<-main_data %>%
-  select(uuid,enum_id,today, access_location, contains("admin"), point_id, contains("gps"), distance_to_site)
+  select(uuid,enum_id,today, access_location, contains("admin"), point_id, contains("gps"), distance_to_site, fo_in_charge) %>%
+  left_join(point_data %>% select(point_id = Point_ID, Hex_ID))
 write.xlsx(gps , paste0("03_output/03_gps/gps_checks_", lubridate::today(), ".xlsx"))
+write.xlsx(gps , paste0("03_output/03_gps/gps_checks_2025-07-19.xlsx"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Apply the checks to the main data
@@ -186,7 +201,9 @@ write.xlsx(gps , paste0("03_output/03_gps/gps_checks_", lubridate::today(), ".xl
 
 
 clog_metadata <- c("admin_1", "admin_2", "admin_3", "today","enum_id", "fo_in_charge", "index")
-exclude_patterns <- c("geopoint", "gps", "_index", "_submit", "submission", "_sample_", "^_id$", "^rand", "^_index$","_n","enum_id", "ind_potentially_hoh", "_person_id", "_ind_age", "index", "_photo_URL", "fo_in_charge", "uuid")
+exclude_patterns <- c("geopoint", "gps", "_index", "_submit", "submission", "_sample_", "^_id$", "^rand", "^_index$","_n","enum_id",
+                      "ind_potentially_hoh", "_person_id", "_ind_age", "index", "_photo_URL", "fo_in_charge", "uuid")
+fcs_weight <- main_data %>% select(contains("fcs_weight")) %>% colnames()
 
 ## calculate other questions
 others_to_check <- questions %>%
@@ -207,9 +224,9 @@ outliers_exclude_main <- calc_outlier_exclusion(raw_kobo_data, excluded_q = excl
 checked_main_data <-  main_data %>%
   run_standard_checks(survey = questions, choices = choices, value_check = TRUE,
                       outlier_check = TRUE,
-                      columns_not_to_check_outliers = c(outliers_exclude_main, "ind_aduld_above_18"),
+                      columns_not_to_check_outliers = c(outliers_exclude_main, fcs_weight, "ind_aduld_above_18", "distance_to_site", "interview_duration"),
                       other_check = TRUE,
-                      columns_to_check_others = names(main_data %>% select(contains(others_to_check))),
+                      columns_to_check_others = names(main_data %>% select(any_of(others_to_check))),
                       logical_check = TRUE,
                       logical_list = df_list_logical_checks)
 
@@ -298,7 +315,7 @@ checked_child_feeding <- child_feeding %>%
     outlier_check = TRUE,
     columns_not_to_check_outliers = c(outliers_exclude_child_feeding, "child_age", "child_age_months", "child_pos"),
     other_check = TRUE,
-    columns_to_check_others = names(child_feeding %>% select(contains(others_to_check))),
+    columns_to_check_others = names(child_feeding %>% select(any_of(others_to_check))),
     logical_check = FALSE
 )
 
@@ -319,7 +336,7 @@ checked_nut_ind <- nut_ind %>%
     outlier_check = TRUE,
     columns_not_to_check_outliers = c(outliers_exclude_nut_ind, "nut_person_id", "nut_ind_pos", "nut_ind_gender", "muac_calc"),
     other_check = TRUE,
-    columns_to_check_others = names(nut_ind %>% select(contains(others_to_check))),
+    columns_to_check_others = names(nut_ind %>% select(any_of(others_to_check))),
     logical_check = FALSE
   )
 
@@ -340,7 +357,7 @@ died_member_checked <- died_member %>%
     outlier_check = TRUE,
     columns_not_to_check_outliers = outliers_exclude_mortality,
     other_check = TRUE,
-    columns_to_check_others = names(died_member %>% select(contains(others_to_check))),
+    columns_to_check_others = names(died_member %>% select(any_of(others_to_check))),
     logical_check = FALSE
     )
 
@@ -356,10 +373,10 @@ died_member_cleaning_log <-  died_member_checked %>%
 final_clog <- bind_rows(
   main_cleaning_log$cleaning_log %>% mutate(clog_type = "main"),
   hh_roster_cleaning_log$cleaning_log %>% mutate(clog_type = "roster"),
-  checked_wgs_cleaning_log$cleaning_log %>% mutate(clog_type = "wgs_ind"),
-  child_feeding_cleaning_log$cleaning_log %>% mutate(clog_type = "nut_ind"),
-  nut_ind_cleaning_log$cleaning_log %>% mutate(clog_type = "edu_ind"),
-  died_member_cleaning_log$cleaning_log %>% mutate(clog_type = "mortality_ind")
+  checked_wgs_cleaning_log$cleaning_log %>% mutate(clog_type = "wgs_repeat"),
+  child_feeding_cleaning_log$cleaning_log %>% mutate(clog_type = "child_feeding"),
+  nut_ind_cleaning_log$cleaning_log %>% mutate(clog_type = "nut_ind"),
+  died_member_cleaning_log$cleaning_log %>% mutate(clog_type = "died_member")
   )
 
 
