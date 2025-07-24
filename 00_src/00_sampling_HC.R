@@ -20,6 +20,7 @@ idp_sheet  <- "CCCM IDP Site List (Verified)"
 
 # CRS & grid
 crs_utm    <- 32638
+
 hex_size    <- 1000  # 1 km^2
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -33,9 +34,11 @@ UoA_Admin_Lookup <- read_excel("02_input/03_sampling/UoA_Admin_Lookup.xlsx", she
 district <- st_read(adm2_fp) %>%
   st_transform(crs_utm) %>%
   left_join(UoA_Admin_Lookup, by = join_by("ADM1_EN" == "adm_1", "ADM2_EN" == "adm_2")) %>%
-  filter(!is.na(unit_of_analysis))
+  filter(!is.na(unit_of_analysis)) %>%
+  filter(ADM2_EN == "Cabudwaaq")
 
 pop_rast   <- rast(raster_fp)
+pop_rast_utm <- terra::project(pop_rast, paste0("EPSG:", crs_utm))
 
 idp_sites <- read_excel(idp_xlsx, sheet = idp_sheet) %>%
   filter(!is.na(Longitude)) %>%
@@ -107,6 +110,10 @@ hex_grid <- st_make_grid(district, cellsize = hex_size, square = FALSE) %>%
   st_intersection(district) %>%
   mutate(hex_ID   = paste0("H", sprintf("%06d", row_number())),
          hex_area = as.numeric(st_area(geometry)))  # in m²
+
+## remove this after
+hex_grid_cut <- hex_grid
+## up to here
 
 # subtract IDP areas
 hex_grid_cut <- st_difference(hex_grid, idp_buffers)
@@ -203,7 +210,14 @@ good_clusters <- filter(cluster_pops, cluster_pop >= 5000)$cluster_id
 hex_urban_centers <- filter(hex_dense, cluster_id %in% good_clusters) %>%
   mutate(HH_total = ceiling(pop_total / 6))
 
-st_write(hex_urban_centers, "03_output/05_sampling/urban_hc/urban_hc_hexagons.shp", delete_layer = T)
+st_write(hex_urban_centers, "03_output/05_sampling/01_sampling_shapefiles_hc/urban_hc_hexagons.shp", delete_layer = T)
+
+
+names(hex_urban_centers) <- str_replace_all(names(hex_urban_centers), "_|\\.", "")
+
+hex_urban_centers %>%
+  st_write(., "03_output/05_sampling/01_sampling_shapefiles_hc/test_cabudwaaq.shp", delete_layer = T)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Export CSV
@@ -225,3 +239,4 @@ tm_shape(hex_urban_centers) +
   tm_polygons(col="red", alpha=0.3, border="darkred") +
   tm_basemap("OpenStreetMap") +
   tm_layout(title="Bay: Towns & Suburbs (dens≥300 & pop≥5k)")
+

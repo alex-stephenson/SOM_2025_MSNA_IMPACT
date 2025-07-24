@@ -30,7 +30,7 @@ library(robotoolbox)
 library(impactR4PHU)
 
 
-date_to_filter <- "2025-07-17"
+date_to_filter <- "2025-07-21"
 date_time_now <- format(Sys.time(), "%b_%d_%Y_%H%M%S")
 
 source("00_src/00_utils.R")
@@ -192,7 +192,6 @@ gps<-main_data %>%
   select(uuid,enum_id,today, access_location, contains("admin"), point_id, contains("gps"), distance_to_site, fo_in_charge) %>%
   left_join(point_data %>% select(point_id = Point_ID, Hex_ID))
 write.xlsx(gps , paste0("03_output/03_gps/gps_checks_", lubridate::today(), ".xlsx"))
-write.xlsx(gps , paste0("03_output/03_gps/gps_checks_2025-07-19.xlsx"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. Apply the checks to the main data
@@ -241,6 +240,8 @@ main_cleaning_log <-  checked_main_data %>%
 # ──────────────────────────────────────────────────────────────────────────────
 
 main_to_join <- main_data %>%
+  left_join(point_data %>% select(Hex_ID, point_id = Point_ID)) %>%
+  left_join(geo_ref_data %>% select(Hex_ID= hex_ID, unit_of_analysis)) %>%
   dplyr::select(admin_1, admin_2, admin_3, today,enum_id, resp_gender, enum_gender,
                 hoh_gender,fo_in_charge,instance_name, index)
 
@@ -351,6 +352,7 @@ nut_ind_cleaning_log <-  checked_nut_ind %>%
 outliers_exclude_mortality <- calc_outlier_exclusion(died_member, excluded_q = excluded_questions, exclude_patt = exclude_patterns)
 
 died_member_checked <- died_member %>%
+  mutate(across(ends_with("_other"), as.character)) %>%
   run_standard_checks(
     survey = questions, choices = choices,
     value_check = TRUE,

@@ -36,6 +36,10 @@ library(addindicators)
 geo_ref_data <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_SOM_MSNA_2025.xlsx", sheet = "sample_frame_SOM_MSNA_2025") %>%
   select(unit_of_analysis, district, admin_2, hex_ID, survey_buffer)
 
+point_data <- read_csv("04_tool/sample_points.csv") %>%
+  distinct() %>%
+  select(Hex_ID, point_id = Point_ID)
+
 # read in the FO/district mapping
 fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
   rename(fo_in_charge = FO_In_Charge)
@@ -58,9 +62,14 @@ file_list <- file_list %>%
 # Function to read and convert all columns to character
 read_and_clean <- function(file, sheet) {
   read_excel(file, sheet = sheet, col_types = "text") %>%
-    mutate(across(everything(), as.character)) %>%   # Convert all columns to character
-    mutate(file_path = file)
+    mutate(
+      across(everything(), as.character),
+      old_value = str_replace(str_trim(old_value), "\\.0+$", ""),
+      new_value = str_replace(str_trim(new_value), "\\.0+$", ""),
+      file_path = file
+    )
 }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Split the code - the following process runs if we have identified any clogs.
@@ -81,7 +90,8 @@ if(! is_empty(file_list)) {
   cleaning_logs <- cleaning_logs %>%
     filter(! is.na(change_type)) %>%
     mutate(new_value = ifelse(change_type == "no_action" & is.na(new_value), old_value, new_value)) %>%
-    filter(!str_detect(question, "fcs_weight_")) ## these questions included on first day but shouldnt be
+    filter(!str_detect(question, "fcs_weight_")) %>% ## these questions included on first day but shouldnt be
+    filter(question != "fsl_fcs_score") ## I dont want to include changes to FCS, we'll just recalulcate it
 
   ## now we split the clogs by the clog type, we manually coded at the end of the last script.
 
@@ -324,10 +334,33 @@ if(! is_empty(file_list)) {
     writexl::write_xlsx(., "03_output/02_deletion_log/combined_deletion_log.xlsx")
 }
 
+## now add the geospatial metadata to the output
+
+clean_data_logs$main$my_clean_data_final <- clean_data_logs$main$my_clean_data_final %>%
+  left_join(fo_district_mapping %>%  select(contains("admin"))) %>%
+  relocate(admin_2_name, .after = "admin_2") %>%
+  relocate(admin_1_name, .after = "admin_1") %>%
+  left_join(point_data) %>%
+  left_join(geo_ref_data %>% select(Hex_ID= hex_ID, unit_of_analysis)) %>%
+  select(-hc_hex_id, -idp_hex_id)
+
+main_to_join <- clean_data_logs$main$my_clean_data_final %>%
+  dplyr::select(admin_1, admin_1_name, admin_2, admin_2_name,  admin_3, today,enum_id, resp_gender,
+                hoh_gender,instance_name, index, Hex_ID, unit_of_analysis)
+
+clean_data_logs <- imap(clean_data_logs, function(df, name) {
+  if (name == "main") {
+    df
+  } else {
+    df$my_clean_data_final <- df$my_clean_data_final %>%
+      left_join(main_to_join, by = join_by(index == index))
+    df
+  }}
+)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Now review the cleaning and output the clog issues
 # ──────────────────────────────────────────────────────────────────────────────
-
 
 if(! is_empty(file_list)) {
 
@@ -415,6 +448,7 @@ if(! is_empty(file_list)) {
       hhs_categories_severe = "Severe",
       hhs_categories_very_severe = "Very Severe"
     )
+
 
 
   ### add indicators to the nutrition section
@@ -528,13 +562,13 @@ if(! is_empty(file_list)) {
 admin_lookup <- geo_ref_data %>% select(admin_2, district, unit_of_analysis) %>% distinct() %>%
   mutate(admin_3 = ifelse(str_detect(unit_of_analysis, "IDP"), "idp_sites", "hc"))
 
-UoA_hh_size <- all_raw_data$main %>%
+UoA_hh_size <- clean_data_logs$main$my_clean_data_final %>%
   left_join(admin_lookup) %>%
   group_by(unit_of_analysis) %>%
   summarise(avg_UoA = mean(hh_size, na.rm = T),
             count_region = n())
 
-enum_hh_size <- all_raw_data$main %>%
+enum_hh_size <- clean_data_logs$main$my_clean_data_final %>%
   left_join(admin_lookup) %>%
   group_by(unit_of_analysis, enum_id) %>%
   summarise(avg_enum = mean(hh_size, na.rm = T),
@@ -548,7 +582,7 @@ hh_ratio <- enum_hh_size %>%
   mutate(hh_ratio = avg_enum / avg_UoA) %>%
   filter(hh_ratio < 0.66)
 
-all_raw_data$main %>%
+clean_data_logs$main$my_clean_data_final %>%
   left_join(admin_lookup) %>%
   group_by(unit_of_analysis) %>%
   summarise(avg_HH_size = mean(hh_size), number_interviews = n())
@@ -566,7 +600,7 @@ hh_ratio %>%
 # 5. Review the LCSI scores
 # ──────────────────────────────────────────────────────────────────────────────
 
-lcsi_uuids <- all_raw_data$main %>% filter(fsl_fcs_category == "Poor" &
+lcsi_uuids <- clean_data_logs$main$my_clean_data_final %>% filter(fsl_fcs_category == "Poor" &
                                 if_all(
                                   c(
                                     fsl_lcsi_crisis1,
@@ -611,9 +645,9 @@ problem_questions <- raw_metadata_length %>% mutate(duration_seconds = end - sta
 ## read in already approved ones
 exclusions <- read_excel("02_input/02_duplicate_exclusions/exclusions.xlsx")
 
-clean_data_logs <- list(main = list(my_clean_data_final = readxl::read_excel("03_output/05_clean_data/final_clean_main_data.xlsx"), raw_data = readxl::read_excel("03_output/01_raw_data/raw_data_main.xlsx")))
-my_clean_data_added <- clean_data_logs[[1]]$my_clean_data_final %>%
-  left_join(fo_district_mapping)
+my_clean_data_added <- clean_data_logs$main$my_clean_data_final %>%
+  left_join(fo_district_mapping) %>%
+  rename(fo =fo_in_charge)
 
 enum_typos <- my_clean_data_added %>%
   dplyr::count(enum_id) %>%
@@ -636,8 +670,6 @@ soft_per_enum <- group_by_enum %>%
   )
   )
 
-
-
 # recombine the similar survey data
 similar_surveys <- soft_per_enum %>%
   purrr::map(~ .[["soft_duplicate_log"]]) %>%
@@ -648,35 +680,35 @@ similar_surveys <- soft_per_enum %>%
   do.call(dplyr::bind_rows, .)
 
 
-similar_surveys_with_info <- similar_surveys %>%
-  left_join(my_clean_data_added, by = "uuid") %>%
-  left_join(my_clean_data_added %>% select(uuid, similiar_survey_date = today), by = join_by("id_most_similar_survey" == "uuid")) %>%
-  select(district, idp_hc_code, fo, today, start, end, uuid, issue, enum_name, num_cols_not_NA, total_columns_compared, num_cols_dnk, similiar_survey_date, id_most_similar_survey, number_different_columns) %>%
-  filter(! uuid %in% exclusions$uuid & ! id_most_similar_survey %in% exclusions$id_most_similar_survey,
-         today == similiar_survey_date)
+if(nrow(similar_surveys) > 0) {
+  similar_surveys_with_info <- similar_surveys %>%
+    left_join(my_clean_data_added, by = "uuid") %>%
+    left_join(my_clean_data_added %>% select(uuid, similiar_survey_date = today), by = join_by("id_most_similar_survey" == "uuid")) %>%
+    select(district, idp_hc_code, fo, today, start, end, uuid, issue, enum_name, num_cols_not_NA, total_columns_compared, num_cols_dnk, similiar_survey_date, id_most_similar_survey, number_different_columns) %>%
+    filter(! uuid %in% exclusions$uuid & ! id_most_similar_survey %in% exclusions$id_most_similar_survey,
+           today == similiar_survey_date)
 
+  similar_survey_raw_data <- my_clean_data %>%
+    filter(uuid %in% (similar_surveys_with_info$uuid))
 
-similar_survey_raw_data <- my_clean_data %>%
-  filter(uuid %in% (similar_surveys_with_info$uuid))
+  similar_survey_export_path <- paste0("03_output/04_similar_survey_check/similar_surveys_", today(), ".xlsx")
 
-similar_survey_export_path <- paste0("03_output/04_similar_survey_check/similar_surveys_", today(), ".xlsx")
+  # create a workbook with our data
 
-# create a workbook with our data
+  similar_survey_output <- list("similar_surveys" = similar_surveys_with_info, "similar_survey_raw_data" = similar_survey_raw_data)
 
-similar_survey_output <- list("similar_surveys" = similar_surveys_with_info, "similar_survey_raw_data" = similar_survey_raw_data)
+  similar_survey_output %>%
+    writexl::write_xlsx(., similar_survey_export_path)
+} else {
+  message("No duplicate surveys detected")
 
-similar_survey_output %>%
-  writexl::write_xlsx(., similar_survey_export_path)
-
-
-
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Review FCS Scores
 # ──────────────────────────────────────────────────────────────────────────────
 
-#clean_data_logs$main$my_clean_data_final %>%
-all_raw_data$main %>%
+clean_data_logs$main$my_clean_data_final %>%
   mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
   ggplot(aes(fsl_fcs_score)) +
   geom_histogram() +
@@ -684,17 +716,61 @@ all_raw_data$main %>%
   geom_vline(xintercept =  10, colour = "orangered3", linetype = "dashed", linewidth = 0.5) +
   facet_wrap(~ admin_3)
 
-#clean_data_logs$main$my_clean_data_final %>%
-all_raw_data$main %>%
+clean_data_logs$main$my_clean_data_final %>%
   mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
   group_by(admin_3) %>%
   summarise(avg_fcs = mean(fsl_fcs_score, na.rm = T))
 
-#clean_data_logs$main$my_clean_data_final %>%
-all_raw_data$main %>%
+clean_data_logs$main$my_clean_data_final %>%
   mutate(fsl_fcs_score = as.double(fsl_fcs_score)) %>%
   ggplot(., aes(x= admin_3, y = fsl_fcs_score)) +
   geom_boxplot(fill="slateblue", alpha=0.2) +
   geom_jitter(color="black", size=0.2, alpha=0.5) +
   xlab("")
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Review MUAC data
+# ──────────────────────────────────────────────────────────────────────────────
+
+count_surveys <- clean_data_logs$main$my_clean_data_final %>%
+  count(unit_of_analysis) %>%
+  rename(total_surveys = n)
+
+clean_data_logs$nut_ind$my_clean_data_final %>%
+  left_join(main_to_join) %>%
+  filter(!is.na(muac_cm)) %>%
+  count(unit_of_analysis) %>%
+  left_join(count_surveys) %>%
+  select(unit_of_analysis, muac_surveys = n, total_surveys) %>%
+  mutate(muac_per_survey = muac_surveys / total_surveys) %>%
+  left_join(geo_ref_data %>% group_by(unit_of_analysis) %>% summarise(target_sample_size = sum(survey_buffer))) %>%
+  mutate(pct_complete = total_surveys / target_sample_size) %>%
+  rename(surveys_done = total_surveys) %>%
+  writexl::write_xlsx(., "03_output/muac_checks.xlsx")
+
+clean_data_logs$roster$my_clean_data_final %>%
+  left_join(main_to_join) %>%
+  mutate(under_5 = ifelse(ind_age < 5, TRUE, FALSE)) %>%
+  group_by(unit_of_analysis) %>%
+  summarise(pct_under_5 = mean(under_5),
+            srvy_count = n())
+
+### Cabudwaaq collected
+
+collected_check <- clean_data_logs$main$my_clean_data_final %>%
+  mutate(collected = "YES")
+
+read_csv("04_tool/sample_points.csv") %>%
+  select(District, Hex_ID, point_id = Point_ID) %>%
+  left_join(collected_check %>% select(District = admin_2_name, Hex_ID, point_id, collected)) %>%
+  mutate(collected = ifelse(is.na(collected), "NO", collected)) %>%
+  writexl::write_xlsx("all_points_confirmed.xlsx")
+
+
+clean_data_logs$nut_ind$my_clean_data_final %>%
+  filter(!is.na(oedema_confirm)) %>%
+  View()
 
