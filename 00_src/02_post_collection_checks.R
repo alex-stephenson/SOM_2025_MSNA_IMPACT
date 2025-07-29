@@ -91,7 +91,8 @@ if(! is_empty(file_list)) {
     filter(! is.na(change_type)) %>%
     mutate(new_value = ifelse(change_type == "no_action" & is.na(new_value), old_value, new_value)) %>%
     filter(!str_detect(question, "fcs_weight_")) %>% ## these questions included on first day but shouldnt be
-    filter(question != "fsl_fcs_score") ## I dont want to include changes to FCS, we'll just recalulcate it
+    filter(question != "fsl_fcs_score") %>% ## I dont want to include changes to FCS, we'll just recalulcate it
+    filter(question != "interview_duration")
 
   ## now we split the clogs by the clog type, we manually coded at the end of the last script.
 
@@ -116,6 +117,8 @@ if(! is_empty(file_list)) {
     )
   })
 
+
+
   names(list_of_df_and_clog) <- common_rosters
 
   message("✅ Clogs successfully split")
@@ -123,7 +126,7 @@ if(! is_empty(file_list)) {
 
   # Read in all the dlogs
   all_dlogs <- readxl::read_excel(r"(03_output/02_deletion_log/deletion_log.xlsx)", col_types = "text")
-  #manual_dlog <- readxl::read_excel("03_output/02_deletion_log/MSNA_2025_Manual_Deletion_Log.xlsx", col_types = "text")
+  manual_dlog <- readxl::read_excel("03_output/02_deletion_log/MSNA_2025_Manual_Deletion_Log.xlsx", col_types = "text")
 
   cleaning_log_deletions <- cleaning_logs %>%
     filter(change_type == "remove_survey") %>%
@@ -133,6 +136,7 @@ if(! is_empty(file_list)) {
 
   deletion_log <- bind_rows(all_dlogs, cleaning_log_deletions) %>%
     bind_rows(all_dlogs) %>%
+    bind_rows(manual_dlog) %>%
     distinct(uuid, .keep_all = T)
 
 
@@ -395,6 +399,38 @@ if(! is_empty(file_list)) {
   writexl::write_xlsx(clog_issues, paste0("01_cleaning_logs/00_clog_review/cleaning_log_review_", lubridate::today(), ".xlsx"))
 
 
+  ## now we will drop the LCIS indicators that are not being used
+
+  lcsi_columns <- clean_data_logs$main$my_clean_data_final %>%
+    select(matches("fsl_lcsi_stress|fsl_lcsi_crisis|fsl_lcsi_emergency")) %>%
+    select(-check_fsl_lcsi_crisis5) %>%
+    colnames()
+
+  obs <- nrow(clean_data_logs$main$my_clean_data_final)
+
+  lcsi_nas <- clean_data_logs$main$my_clean_data_final %>%
+    select(uuid, any_of(lcsi_columns)) %>%
+    pivot_longer(lcsi_columns) %>%
+    filter(value == "not_applicable") %>%
+    count(name) %>%
+    arrange(desc(n)) %>%
+    mutate(pct_not_applicable = n / obs)
+
+    lcsi_stress <- lcsi_nas %>%
+      filter(str_detect(name, "fsl_lcsi_stress")) %>%
+      slice_min(pct_not_applicable, n = 4) %>%
+      pull(name)
+
+    lcsi_emergency <- lcsi_nas %>%
+      filter(str_detect(name, "fsl_lcsi_emergency")) %>%
+      slice_min(pct_not_applicable, n = 3) %>%
+      pull(name)
+
+    lcsi_crisis <- lcsi_nas %>%
+      filter(str_detect(name, "fsl_lcsi_crisis")) %>%
+      slice_min(pct_not_applicable, n = 3) %>%
+      pull(name)
+
   ### add indicators to the cleaned main data
 
   clean_data_logs$main$my_clean_data_final <- clean_data_logs$main$my_clean_data_final %>%
@@ -417,9 +453,9 @@ if(! is_empty(file_list)) {
       often_answer = "often"
     ) %>%
     add_eg_lcsi(
-      lcsi_stress_vars = c("fsl_lcsi_stress1", "fsl_lcsi_stress2", "fsl_lcsi_stress3", "fsl_lcsi_stress4"),
-      lcsi_crisis_vars = c("fsl_lcsi_crisis1", "fsl_lcsi_crisis2", "fsl_lcsi_crisis3"),
-      lcsi_emergency_vars = c("fsl_lcsi_emergency1", "fsl_lcsi_emergency2", "fsl_lcsi_emergency3"),
+      lcsi_stress_vars = lcsi_stress,
+      lcsi_crisis_vars = lcsi_crisis,
+      lcsi_emergency_vars = lcsi_emergency,
       yes_val = "yes",
       no_val = "no_had_no_need",
       exhausted_val = "no_exhausted",
@@ -447,89 +483,103 @@ if(! is_empty(file_list)) {
       hhs_categories_moderate = "Moderate",
       hhs_categories_severe = "Severe",
       hhs_categories_very_severe = "Very Severe"
+    ) %>%
+    impactR4PHU::add_hdds(
+      fsl_hdds_cereals = "fsl_hdds_cereal",
+      fsl_hdds_tubers = "fsl_hdds_roots",
+      fsl_hdds_veg = "fsl_hdds_veg",
+      fsl_hdds_fruit = "fsl_hdds_fruit",
+      fsl_hdds_meat = "fsl_hdds_meat",
+      fsl_hdds_eggs = "fsl_hdds_eggs",
+      fsl_hdds_fish = "fsl_hdds_fish",
+      fsl_hdds_legumes = "fsl_hdds_legumes",
+      fsl_hdds_dairy = "fsl_hdds_dairy",
+      fsl_hdds_oil = "fsl_hdds_oil",
+      fsl_hdds_sugar = "fsl_hdds_sugar",
+      fsl_hdds_condiments = "fsl_hdds_condiments",
+      yes_val = "yes",
+      no_val = "no"
     )
 
-
-
-  ### add indicators to the nutrition section
-  clean_data_logs$child_feeding$my_clean_data_final <- clean_data_logs$child_feeding$my_clean_data_final %>%
-    mutate(drink_yoghurt_yn = ifelse(yoghurt > 0, "yes", "no")) %>%
-    impactR4PHU::add_iycf(
-                          yes_value = "yes",
-                          no_value = "no",
-                          dnk_value = "dnk",
-                          pna_value = "pnta",
-                          age_months = "child_age_months",
-                          iycf_1 = "breastfed_ever", # ever breastfed (y/n)
-                          iycf_2 = "child_first_breastfeeding", # how long the child started breastfeeding after birth
-                          iycf_4 = "breastfeeding", # breastfed yesterday during the day or night (y/n)
-                          iycf_5 = "infant_bottlefed", #indicates if the child drink anything from a bottle yesterday
-                          iycf_6a = "drink_water", # plain water
-                          iycf_6b = "drink_formula_yn", # infant formula (y/n)
-                          iycf_6c = "drink_milk_yn", # milk from animals, fresh tinned powder (y/n)
-                          iycf_6d = "drink_yoghurt_yn", # yoghurt drinks (y/n)
-                          iycf_6e = "chocolate_drink", # chocolate flavoured drinks, including from syrup / powders (y/n)
-                          iycf_6f = "juice_drink", # Fruit juice or fruit-flavoured drinks including those made from syrups or powders? (y/n)
-                          iycf_6g = "soda_drink", # sodas, malt drinks, sports and energy drinks (y/n)
-                          iycf_6h = "tea_drink", # tea, coffee, herbal drinks (y/n)
-                          iycf_6i = "broth_drink", # clear broth / soup (y/n)
-                          iycf_6j = "other_drink", # other liquids (y/n)
-                          iycf_7a = "yoghurt", # yoghurt (NOT yoghurt drinks) (number)
-                          iycf_7b = "cereals",
-                          iycf_7c = "vegetables", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
-                          iycf_7d = "root_vegetables", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
-                          iycf_7e = "leafy_vegetables", # dark green leafy vegetables (y/n)
-                          iycf_7f = "vegetables_other", # other vegetables (y/n)
-                          iycf_7g = "tropical_fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
-                          iycf_7h = "fruits_other", # other fruits (y/n)
-                          iycf_7i = "organ_meats", # organ meats (liver ,kidney, heart) (y/n)
-                          iycf_7j = "meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
-                          #iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
-                          iycf_7l = "egg", # eggs (y/n)
-                          iycf_7m = "seafood", # fish (fresh or dried fish or shellfish) (y/n)
-                          iycf_7n = "legumes", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
-                          iycf_7o = "cheese", # cheeses (hard or soft cheeses) (y/n)
-                          #iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
-                          #iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
-                          iycf_7r = "food_other",
-                          iycf_8 = "times_solid", # times child ate solid/semi-solid foods (number),
-                          uuid = "uuid") %>%
-    mutate(across(starts_with("other_"), as.numeric)) %>%
-    impactR4PHU::check_iycf_flags(.dataset = .,
-                                  age_months = "child_age_months",
-                                  iycf_4 = "breastfed_yesterday", # breastfed yesterday during the day or night (y/n)
-                                  iycf_6a = "drink_water", # plain water
-                                  iycf_6b = "drink_formula_yn", # infant formula (y/n)
-                                  iycf_6c = "drink_milk_yn", # milk from animals, fresh tinned powder (y/n)
-                                  iycf_6d = "drink_yoghurt_yn", # yoghurt drinks (y/n)
-                                  iycf_6e = "chocolate_drink", # chocolate flavoured drinks, including from syrup / powders (y/n)
-                                  iycf_6f = "juice_drink", # Fruit juice or fruit-flavoured drinks including those made from syrups or powders? (y/n)
-                                  iycf_6g = "soda_drink", # sodas, malt drinks, sports and energy drinks (y/n)
-                                  iycf_6h = "tea_drink", # tea, coffee, herbal drinks (y/n)
-                                  iycf_6i = "broth_drink", # clear broth / soup (y/n)
-                                  iycf_6j = "other_drink", # other liquids (y/n)
-                                  iycf_7a = "yoghurt_food", # yoghurt (NOT yoghurt drinks) (number)
-                                  iycf_7b = "porridge_food",
-                                  iycf_7c = "pumpkin_food", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
-                                  iycf_7d = "plantain_food", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
-                                  iycf_7e = "vegetables_food", # dark green leafy vegetables (y/n)
-                                  iycf_7f = "other_vegetables", # other vegetables (y/n)
-                                  iycf_7g = "fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
-                                  iycf_7h = "other_fruits", # other fruits (y/n)
-                                  iycf_7i = "liver", # organ meats (liver ,kidney, heart) (y/n)
-                                  iycf_7j = "canned_meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
-                                  iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
-                                  iycf_7l = "eggs", # eggs (y/n)
-                                  iycf_7m = "fish", # fish (fresh or dried fish or shellfish) (y/n)
-                                  iycf_7n = "cereals", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
-                                  iycf_7o = "cheese", # cheeses (hard or soft cheeses) (y/n)
-                                  iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
-                                  iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
-                                  iycf_7r = "other_solid",
-                                  iycf_8 = "times_solid",
-                                  iycf_6b_num = "drink_formula",
-                                  iycf_6c_num = "drink_milk",
-                                  iycf_6d_num = "drink_yoghurt")
+#   ### add indicators to the nutrition section
+#   clean_data_logs$child_feeding$my_clean_data_final <- clean_data_logs$child_feeding$my_clean_data_final %>%
+#     mutate(drink_yoghurt_yn = ifelse(yoghurt > 0, "yes", "no")) %>%
+#     impactR4PHU::add_iycf(
+#                           yes_value = "yes",
+#                           no_value = "no",
+#                           dnk_value = "dnk",
+#                           pna_value = "pnta",
+#                           age_months = "child_age_months",
+#                           iycf_1 = "breastfed_ever", # ever breastfed (y/n)
+#                           iycf_2 = "child_first_breastfeeding", # how long the child started breastfeeding after birth
+#                           iycf_4 = "breastfeeding", # breastfed yesterday during the day or night (y/n)
+#                           iycf_5 = "infant_bottlefed", #indicates if the child drink anything from a bottle yesterday
+#                           iycf_6a = "drink_water", # plain water
+#                           iycf_6b = "drink_formula_yn", # infant formula (y/n)
+#                           iycf_6c = "drink_milk_yn", # milk from animals, fresh tinned powder (y/n)
+#                           iycf_6d = "drink_yoghurt_yn", # yoghurt drinks (y/n)
+#                           iycf_6e = "chocolate_drink", # chocolate flavoured drinks, including from syrup / powders (y/n)
+#                           iycf_6f = "juice_drink", # Fruit juice or fruit-flavoured drinks including those made from syrups or powders? (y/n)
+#                           iycf_6g = "soda_drink", # sodas, malt drinks, sports and energy drinks (y/n)
+#                           iycf_6h = "tea_drink", # tea, coffee, herbal drinks (y/n)
+#                           iycf_6i = "broth_drink", # clear broth / soup (y/n)
+#                           iycf_6j = "other_drink", # other liquids (y/n)
+#                           iycf_7a = "yoghurt", # yoghurt (NOT yoghurt drinks) (number)
+#                           iycf_7b = "cereals",
+#                           iycf_7c = "vegetables", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
+#                           iycf_7d = "root_vegetables", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
+#                           iycf_7e = "leafy_vegetables", # dark green leafy vegetables (y/n)
+#                           iycf_7f = "vegetables_other", # other vegetables (y/n)
+#                           iycf_7g = "tropical_fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
+#                           iycf_7h = "fruits_other", # other fruits (y/n)
+#                           iycf_7i = "organ_meats", # organ meats (liver ,kidney, heart) (y/n)
+#                           iycf_7j = "meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
+#                           #iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
+#                           iycf_7l = "egg", # eggs (y/n)
+#                           iycf_7m = "seafood", # fish (fresh or dried fish or shellfish) (y/n)
+#                           iycf_7n = "legumes", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
+#                           iycf_7o = "cheese", # cheeses (hard or soft cheeses) (y/n)
+#                           #iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
+#                           #iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
+#                           iycf_7r = "food_other",
+#                           iycf_8 = "times_solid", # times child ate solid/semi-solid foods (number),
+#                           uuid = "uuid") %>%
+#     mutate(across(starts_with("other_"), as.numeric)) %>%
+#     impactR4PHU::check_iycf_flags(.dataset = .,
+#                                   age_months = "child_age_months",
+#                                   iycf_4 = "breastfed_yesterday", # breastfed yesterday during the day or night (y/n)
+#                                   iycf_6a = "drink_water", # plain water
+#                                   iycf_6b = "drink_formula_yn", # infant formula (y/n)
+#                                   iycf_6c = "drink_milk_yn", # milk from animals, fresh tinned powder (y/n)
+#                                   iycf_6d = "drink_yoghurt_yn", # yoghurt drinks (y/n)
+#                                   iycf_6e = "chocolate_drink", # chocolate flavoured drinks, including from syrup / powders (y/n)
+#                                   iycf_6f = "juice_drink", # Fruit juice or fruit-flavoured drinks including those made from syrups or powders? (y/n)
+#                                   iycf_6g = "soda_drink", # sodas, malt drinks, sports and energy drinks (y/n)
+#                                   iycf_6h = "tea_drink", # tea, coffee, herbal drinks (y/n)
+#                                   iycf_6i = "broth_drink", # clear broth / soup (y/n)
+#                                   iycf_6j = "other_drink", # other liquids (y/n)
+#                                   iycf_7a = "yoghurt_food", # yoghurt (NOT yoghurt drinks) (number)
+#                                   iycf_7b = "porridge_food",
+#                                   iycf_7c = "pumpkin_food", # vitamin a rich vegetables (pumpkin, carrots, sweet red peppers, squash or yellow/orange sweet potatoes) (y/n)
+#                                   iycf_7d = "plantain_food", # white starches (plaintains, white potatoes, white yams, manioc, cassava) (y/n)
+#                                   iycf_7e = "vegetables_food", # dark green leafy vegetables (y/n)
+#                                   iycf_7f = "other_vegetables", # other vegetables (y/n)
+#                                   iycf_7g = "fruits", # vitamin a rich fruits (ripe mangoes, ripe papayas) (y/n)
+#                                   iycf_7h = "other_fruits", # other fruits (y/n)
+#                                   iycf_7i = "liver", # organ meats (liver ,kidney, heart) (y/n)
+#                                   iycf_7j = "canned_meat", # processed meats (sausages, hot dogs, ham, bacon, salami, canned meat) (y/n)
+#                                   iycf_7k = "other_meat", # any other meats (beef, chicken, pork, goat, chicken, duck) (y/n)
+#                                   iycf_7l = "eggs", # eggs (y/n)
+#                                   iycf_7m = "fish", # fish (fresh or dried fish or shellfish) (y/n)
+#                                   iycf_7n = "cereals", # legumes (beans, peas, lentils, seeds, chickpeas) (y/n)
+#                                   iycf_7o = "cheese", # cheeses (hard or soft cheeses) (y/n)
+#                                   iycf_7p = "sweet_food", # sweets (chocolates, candies, pastries, cakes) (y.n)
+#                                   iycf_7q = "chips", # fried or empty carbs (chips, crisps, french fries, fried dough, instant noodles) (y/n)
+#                                   iycf_7r = "other_solid",
+#                                   iycf_8 = "times_solid",
+#                                   iycf_6b_num = "drink_formula",
+#                                   iycf_6c_num = "drink_milk",
+#                                   iycf_6d_num = "drink_yoghurt")
 
   # ──────────────────────────────────────────────────────────────────────────────
   # 4. Output everything
@@ -761,16 +811,53 @@ clean_data_logs$roster$my_clean_data_final %>%
 ### Cabudwaaq collected
 
 collected_check <- clean_data_logs$main$my_clean_data_final %>%
-  mutate(collected = "YES")
+  mutate(collected = "YES") %>%
+  left_join(fo_district_mapping) %>%
+  distinct(point_id, .keep_all = T)
 
 read_csv("04_tool/sample_points.csv") %>%
+  distinct() %>%
   select(District, Hex_ID, point_id = Point_ID) %>%
-  left_join(collected_check %>% select(District = admin_2_name, Hex_ID, point_id, collected)) %>%
+  left_join(collected_check %>% select(District = admin_2_name, point_id, collected), by = join_by("point_id", "District")) %>%
   mutate(collected = ifelse(is.na(collected), "NO", collected)) %>%
   writexl::write_xlsx("all_points_confirmed.xlsx")
+
+
+points_check <- read_csv("04_tool/sample_points.csv") %>%
+  distinct() %>%
+  select(District, Hex_ID, point_id = Point_ID) %>%
+  left_join(collected_check %>% select(District = admin_2_name, point_id, collected), by = join_by("point_id", "District")) %>%
+  mutate(collected = ifelse(is.na(collected), "NO", collected))
+
+points_check %>%
+  filter(Hex_ID %in% c('H201335', 'H201336', 'H201374')) %>%
+  View()
 
 
 clean_data_logs$nut_ind$my_clean_data_final %>%
   filter(!is.na(oedema_confirm)) %>%
   View()
 
+
+
+## output for Saeed
+clean_data_logs$main$my_clean_data_final <- clean_data_logs$main$my_clean_data_final %>%
+  select(-matches("_gps|geopoint|pt_num|pt_sample|point_number|point_number|threshold_msg|reasons_why_far|final_text"))
+
+clean_data_logs$main$raw_data <- clean_data_logs$main$raw_data %>%
+  select(-matches("_gps|geopoint|pt_num|pt_sample|point_number|point_number|threshold_msg|reasons_why_far|final_text"))
+
+clean_data_logs %>%
+  write_rds(., "SOM_MSNA_P1_all_data_no_PII.rds")
+
+
+list(HH_data <- clean_data_logs$main$my_clean_data_final, roster = clean_data_logs$roster$my_clean_data_final, mortality = clean_data_logs$$my_clean_data_final)
+
+
+flat_list <- imap(clean_data_output, function(sublist, clean_data_output) {
+  imap(sublist, function(df, child_name) {
+    df  # Just return the dataframe
+  }) %>%
+    set_names(~ paste(clean_data_output, ., sep = "_"))  # Prefix child names
+}) %>%
+  flatten()

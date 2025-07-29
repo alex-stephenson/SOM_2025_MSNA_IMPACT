@@ -87,6 +87,7 @@ writexl::write_xlsx(completion_report, paste0("03_output/07_daily_completion/com
 #--------------------------------------------------------
 
 completion_by_FO <- admin_2_done %>%
+  mutate(Surveys_Done = if_else(Surveys_Done > Surveys_Target, Surveys_Target, Surveys_Done)) %>%
   group_by(fo) %>%
   summarise(total_surveys = sum(Surveys_Target, na.rm = T),
             total_done = sum(Surveys_Done, na.rm = T)) %>%

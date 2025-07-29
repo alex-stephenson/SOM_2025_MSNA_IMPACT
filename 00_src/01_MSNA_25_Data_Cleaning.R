@@ -30,7 +30,7 @@ library(robotoolbox)
 library(impactR4PHU)
 
 
-date_to_filter <- "2025-07-21"
+date_to_filter <- "2025-07-27"
 date_time_now <- format(Sys.time(), "%b_%d_%Y_%H%M%S")
 
 source("00_src/00_utils.R")
@@ -167,7 +167,7 @@ deletion_log %>%
 data_in_processing %>%
   filter(length_valid != "Okay") %>%
   left_join(site_data %>% select(idp_hex_id = settlement_idp, Name)) %>%
-  select(uuid, length_valid, admin_1_name, admin_2_name, admin_3, point_id, idp_hex_id, Name, enum_id, interview_duration) %>%
+  select(uuid, today, length_valid, admin_1_name, admin_2_name, admin_3, point_id, idp_hex_id, Name, enum_id, interview_duration) %>%
   writexl::write_xlsx(., paste0("03_output/02_deletion_log/detailed_deletions.xlsx"))
 
 
@@ -441,3 +441,4 @@ cleaning_log %>% purrr::map(~ create_xlsx_cleaning_log(.[],
                                                                             "_",
                                                                             date_time_now,
                                                                             ".xlsx")))
+

@@ -13,6 +13,13 @@ library(srvyr)
 geo_ref_data <- readxl::read_excel("02_input/07_geo_reference_data/sample_frame_SOM_MSNA_2025.xlsx", sheet = "sample_frame_SOM_MSNA_2025") %>%
   select(unit_of_analysis, district, admin_2, hex_ID, survey_buffer)
 
+sample_pop <- readxl::read_excel("02_input/07_geo_reference_data/sample_population.xlsx")
+
+sample_frame <- geo_ref_data %>%
+  group_by(unit_of_analysis) %>%
+  summarise(sample_size = sum(survey_buffer)) %>%
+  left_join(sample_pop)
+
 fo_district_mapping <- read_excel("02_input/04_fo_input/fo_base_assignment_MSNA_25.xlsx") %>%
   rename(fo_in_charge = FO_In_Charge)
 
@@ -25,86 +32,56 @@ questions <- read_excel(kobo_tool_name, sheet = "survey")
 choices <- read_excel(kobo_tool_name, sheet = "choices")
 
 
+questions <- read_excel(kobo_tool_name, sheet = "survey")
 
-kobo_tool_name <- "04_tool/REACH_KEN_2025_MSNA-Tool_v7.xlsx"
-questions <- read_excel(kobo_tool_name, sheet = "survey") %>%
-  filter(! `label::english (en)` %in% c("If other, please specify:", "Please specify:") & ! type %in% c("note", "acknowledge")) %>%
-  mutate(`label::english (en)` = case_when(
-    name == "fsl_hhs_nofoodhh_freq" ~ "How often in the past 4 weeks (30 days), was there ever no food to eat of any kind in your house because of lack of resources to get food?",
+questions_RT <- read_excel(kobo_tool_name, sheet = "survey") %>%
+  filter(! `label::english` %in% c("If other, please specify?", "Please specify:") & ! type %in% c("note", "acknowledge") & ! name %in% c("hc_point_id", "parent_instance_name")) %>%
+  mutate(`label::english` = case_when(
+    name == "vaccination_doses" ~ "How many doses of the BCG vaccine was received?",
+    name == "vaccination_doses_measles" ~ "How many doses of the measles vaccine was received?",
     name == "fsl_hhs_sleephungry_freq" ~ "How often in the past 4 weeks (30 days), did you or any household member go to sleep at night hungry because there was not enough food?",
     name == "fsl_hhs_alldaynight_freq" ~ "How often in the past 4 weeks (30 days), did you or any household member go a whole day or night without eating anything at all because there was not enough food?",
-    name == "fsl_lcsi_stress1" ~ " In the last 30 days, did your household either sell non-food items that were provided as assistance (camp resident) or spend savings (host community) because of a lack of food or money to buy food?",
-    name == "fsl_lcsi_stress2" ~ " In the last 30 days, did your household either sell, share or exchange food rations (camp resident) or sell more aniamls than usual (host community) because of a lack of food or money to buy food?",
-    name == "fsl_lcsi_emergency2" ~ "In the last 30 days, did your household engage in socially degrading, high-risk, exploitive or life-threatening jobs or income-generating activities (e.g., smuggling, theft, joining armed groups, prostitution) (camp resident) or sell house or land (host community) because of a lack of food or money to buy food?",
-    name == "fsl_lcsi_emergency3" ~ " In the last 30 days, did your household have any female child member (under 15) married off (camp resident) or Sell last female productive animals (host community) because of a lack of food or money to buy food?",
-    TRUE ~ `label::english (en)`
+    name == "fsl_hhs_nofoodhh_freq " ~ " How often in the past 4 weeks (30 days), was there  ever no food to eat of any kind in your house because of lack of resources to get food?",
+    TRUE ~ `label::english`
   ))
-choices <- read_excel(kobo_tool_name, sheet = "choices") %>%
-  filter(`label::english (en)` != "4. A moderate, positive impact")
 
-kobo_review <- presentresults::review_kobo_labels(questions, choices, "label::english (en)")
+kobo_review <- presentresults::review_kobo_labels(questions_RT, choices, "label::english")
 
 if(nrow(kobo_review) != 0) {
   stop("Review kobo review output")
 }
 
 # read in all the LOAs
-loa_path <- "02_input/09_loa/main_loa.xlsx"
-sheet_names <- readxl::excel_sheets(loa_path)
-loa <- map(sheet_names, ~ read_excel(loa_path, sheet = .x, guess_max = 10000) %>%
-             mutate(group_var = ifelse(group_var == "admin_1_camp", "admin_1_name", group_var)))
-names(loa) <- sheet_names
+#loa_path <- "02_input/09_loa/main_loa.xlsx"
+#sheet_names <- readxl::excel_sheets(loa_path)
+#loa <- map(sheet_names, ~ read_excel(loa_path, sheet = .x, guess_max = 10000))
+#names(loa) <- sheet_names
 
-# read in sampling frame
-sampling_frame <- read_excel("02_input/03_sampling/sampling_frame_with_pop.xlsx", col_types =
-                               c("text","text","text","text","numeric","numeric" )) %>%
-  mutate(sampling_id =
-           case_when(sampling_id == "Loiyangalani Sub County" ~ "Laisamis Sub County",
-                     sampling_id == "Marsabit South Sub County" ~ "Laisamis Sub County",
-                     sampling_id == "Marsabit North Sub County" ~ "North Horr Sub County",
-                     sampling_id == "Sololo Sub County" ~ "Moyale Sub County",
-                     sampling_id == "Marsabit Central Sub County" ~ "Saku Sub County",
-                     TRUE ~ sampling_id)) %>%
-  distinct(sampling_id, population) %>%
-  mutate(sampling_id = str_squish(sampling_id))
-
-
-# load datasets for processing
-# data_file_path <- "02_input/00_data_download/REACH_KEN_2025_MSNA.xlsx"
-# sheet_names <- readxl::excel_sheets(data_file_path)
-# clean_data <- map(sheet_names, ~ read_excel(data_file_path, sheet = .x, guess_max = 10000))
-# sheet_names[1] <- "main"
-# names(clean_data) <- sheet_names
-
-clean_data <- read_rds("03_output/06_final_cleaning_log/final_all_r_object.rds")
+clean_data <- read_rds("03_output/06_clean_data/final_all_r_object.rds")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Some data processing
 # ──────────────────────────────────────────────────────────────────────────────
 
 clean_data$main$my_clean_data_final <- clean_data$main$my_clean_data_final %>%
-  mutate(sampling_id = str_squish(sampling_id)) %>%
-  add_weights(sampling_frame,
-              strata_column_dataset = "sampling_id",
-              strata_column_sample = "sampling_id",
-              population_column = "population") %>%
-  select(-matches("geopoint|pt_num|pt_sample|point_number|point_number|threshold_msg|reasons_why_far|final_text"), -dist_btn_sample_collected)
+  select(-matches("geopoint|pt_num|pt_sample|point_number|point_number|threshold_msg|reasons_why_far|final_text|distance_to_site")) %>%
+  analysistools::add_weights(sample_frame,
+              strata_column_dataset = "unit_of_analysis",
+              strata_column_sample = "unit_of_analysis",
+              population_column = "population")
 
 clean_data$main$raw_data <- clean_data$main$raw_data %>%
   select(-matches("geopoint|pt_num|pt_sample|point_number|point_number|threshold_msg|reasons_why_far|final_text"))
 
-clean_data$nut_ind$my_clean_data_final <- clean_data$nut_ind$my_clean_data_final %>%
-  select(-nut_ind_under5_age_months)
-
-clean_data$roster$my_clean_data_final <- clean_data$roster$my_clean_data_final %>%
-  select(-ind_under5_date, -ind_under5_event, -ind_dob_final,-ind_under5_age_months,
-         -ind_under5_age_years,-check_age_under5, -note_child_age_under5_mismatch)
-
-
+# clean_data$nut_ind$my_clean_data_final <- clean_data$nut_ind$my_clean_data_final %>%
+#   select(-nut_ind_under5_age_months)
+#
+# clean_data$roster$my_clean_data_final <- clean_data$roster$my_clean_data_final %>%
+#   select(-ind_under5_date, -ind_under5_event, -ind_dob_final,-ind_under5_age_months,
+#          -ind_under5_age_years,-check_age_under5, -note_child_age_under5_mismatch)
 
 main_to_join <- clean_data$main$my_clean_data_final  %>%
-  dplyr::select(admin_1_camp, admin_1_name, admin_2_camp, admin_2_name, admin_3_camp, sampling_id, camp_or_hc, setting, today,enum_id,resp_gender, enum_gender,
-                hoh_gender,deviceid,instance_name, index, weights)
+  dplyr::select(index, weights)
 
 clean_data_joined <- imap(clean_data, function(df, name) {
   if (name == "main") {
@@ -323,9 +300,9 @@ clean_data_output <- imap(clean_data, function(df, name) {
 )
 
 ## at some point the list gets reordered. Put MAIN at the first so it exports more nicely.
-main <- list(main = clean_data_output[[5]])
+main <- list(main = clean_data_output[[6]])
 main_name <- names(main)[1]
-clean_data_output[[5]] <- NULL
+clean_data_output[[6]] <- NULL
 clean_data_output <- append(clean_data_output, main, after = 0)
 
 
@@ -335,9 +312,17 @@ variable_tracker <- imap(clean_data, function(x, name) {
 
 variable_tracker_sheet <- bind_rows(variable_tracker) %>%
   mutate(Rationale = case_when(
+    Variable %in% c("admin_1", "admin_1_name", "admin_2", "admin_2_name", "admin_3", "today","enum_id", "resp_gender", "enum_gender",
+                    "hoh_gender","instance_name", "index", "unit_of_analysis") ~ "Metadata added to repeat sections",
+    str_detect(Variable, "idp_hex_id|hc_hex_id") ~ "Removed as aggregated into hex_id",
+    str_detect(Variable, "idp_hex_id|hc_hex_id") ~ "Removed as aggregated into hex_id",
+    Variable == "Hex_ID" ~ "Aggregate Hex IDs",
+    str_detect(Variable, "Hex_ID") ~ "Aggregate Hex IDs",
+    Variable == "distance_to_site" ~ "Geospatial PII",
     str_detect(Variable, "under5|ind_dob") ~ "Removed due to data cleaning",
     str_detect(Variable, "fcs|hhs|lcsi|rcsi|fc") ~ "Added as part of FCS calcs",
     str_detect(Variable, "FCS") ~ "Old FCS overwritten",
+    str_detect(Variable, "hdds_") ~ "Added for HDDS calculation",
     str_detect(Variable, "weights") ~ "Added weight"))
 
 
@@ -359,4 +344,4 @@ flat_list <- append(flat_list, list(Choices = choices), after = 3)
 
 
 
-writexl::write_xlsx(flat_list, "05_HQ_validation/01_all_data_and_logbook/all_data_logbook.xlsx")
+writexl::write_xlsx(flat_list, "05_HQ_Validation/01_all_data_and_logbook/all_data_logbook.xlsx")
